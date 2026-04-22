@@ -61,35 +61,9 @@ Ask Claude: *"List connections in dbread, then count rows per status in the orde
 
 ## 🏗️ Architecture
 
-```mermaid
-flowchart LR
-    subgraph Client["🤖 Claude Code"]
-        AI[AI Agent]
-    end
-    subgraph dbread["🛡️ dbread MCP Server"]
-        direction TB
-        Tools[5 MCP Tools<br/>list_connections · list_tables<br/>describe_table · query · explain]
-        Guard[sqlglot AST Guard]
-        Rate[Token Bucket<br/>Rate Limiter]
-        Audit[JSONL Audit]
-        Tools --> Guard
-        Guard --> Rate
-        Rate --> Audit
-    end
-    subgraph DBs["🗄️ Your Databases (Read-Only Users)"]
-        PG[(Postgres)]
-        MY[(MySQL)]
-        LT[(SQLite)]
-        MS[(MSSQL)]
-        OR[(Oracle)]
-    end
-    AI -.stdio JSON.-> Tools
-    Audit --> PG & MY & LT & MS & OR
-
-    style Client fill:#0f1935,stroke:#22d3ee,color:#fff
-    style dbread fill:#1a1033,stroke:#a855f7,color:#fff
-    style DBs fill:#0f1b1a,stroke:#10b981,color:#fff
-```
+<div align="center">
+<img src="docs/images/architecture-diagram.svg" alt="dbread architecture" width="100%" />
+</div>
 
 **Data flow for a `query` call:**
 
