@@ -7,9 +7,11 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 
-Dialect = Literal["postgres", "mysql", "mssql", "sqlite", "oracle"]
+Dialect = Literal[
+    "postgres", "mysql", "mssql", "sqlite", "oracle", "duckdb", "clickhouse",
+]
 
 
 class ConnectionConfig(BaseModel):
@@ -21,7 +23,7 @@ class ConnectionConfig(BaseModel):
     max_rows: int = 1000
 
     @model_validator(mode="after")
-    def _check_url(self) -> "ConnectionConfig":
+    def _check_url(self) -> ConnectionConfig:
         if bool(self.url) == bool(self.url_env):
             raise ValueError("exactly one of 'url' or 'url_env' must be set")
         return self
@@ -39,6 +41,13 @@ class ConnectionConfig(BaseModel):
 class AuditConfig(BaseModel):
     path: str = "./audit.jsonl"
     rotate_mb: int = 50
+    timezone: str = "UTC"
+    redact_literals: bool = False
+
+    @field_validator("path")
+    @classmethod
+    def _expand_path(cls, v: str) -> str:
+        return str(Path(v).expanduser())
 
 
 class Settings(BaseModel):
@@ -46,13 +55,14 @@ class Settings(BaseModel):
     audit: AuditConfig = AuditConfig()
 
     @model_validator(mode="after")
-    def _check_connections(self) -> "Settings":
+    def _check_connections(self) -> Settings:
         if not self.connections:
             raise ValueError("at least one connection required")
         return self
 
     @classmethod
-    def load(cls, path: str | Path = "config.yaml") -> "Settings":
-        with open(path, encoding="utf-8") as f:
+    def load(cls, path: str | Path = "config.yaml") -> Settings:
+        resolved = Path(path).expanduser()
+        with open(resolved, encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
         return cls(**raw)

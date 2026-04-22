@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import logging
+from collections.abc import Callable
+from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
 from .config import Dialect, Settings
+
+log = logging.getLogger("dbread.connections")
+
+# Dialect -> URL keyword that indicates TLS is configured. If none of the
+# keywords appear, we warn once per connection that creds are plaintext.
+_TLS_HINTS: dict[str, tuple[str, ...]] = {
+    "postgres": ("sslmode=",),
+    "mysql": ("ssl=", "ssl_ca=", "ssl_cert=", "ssl_key="),
+    "mssql": ("encrypt=",),
+}
 
 
 def _pg_args(timeout_s: int) -> dict[str, Any]:
@@ -35,13 +47,38 @@ def _oracle_args(_timeout_s: int) -> dict[str, Any]:
     return {}
 
 
+def _duckdb_args(_timeout_s: int) -> dict[str, Any]:
+    # read-only mode is expressed in the URL: duckdb:///path?access_mode=read_only
+    return {}
+
+
+def _clickhouse_args(timeout_s: int) -> dict[str, Any]:
+    # Layer-0 belt-and-braces: force readonly=1 at connect time even if the
+    # DB user's profile wasn't set up; plus bound each query's wall time.
+    return {"settings": {"readonly": 1, "max_execution_time": timeout_s}}
+
+
 DIALECT_CONNECT_ARGS: dict[Dialect, Callable[[int], dict[str, Any]]] = {
     "postgres": _pg_args,
     "mysql": _mysql_args,
     "mssql": _mssql_args,
     "sqlite": _sqlite_args,
     "oracle": _oracle_args,
+    "duckdb": _duckdb_args,
+    "clickhouse": _clickhouse_args,
 }
+
+
+def _warn_tls(name: str, url: str, dialect: str) -> None:
+    hints = _TLS_HINTS.get(dialect)
+    if not hints:
+        return
+    lower = url.lower()
+    if not any(h in lower for h in hints):
+        log.warning(
+            "connection %r (%s) has no TLS hint (%s) in URL; credentials may travel plaintext",
+            name, dialect, "|".join(hints),
+        )
 
 
 class ConnectionManager:
@@ -56,9 +93,11 @@ class ConnectionManager:
         cfg = self.settings.connections.get(name)
         if cfg is None:
             raise KeyError(f"unknown connection: {name!r}")
+        url = cfg.resolved_url()
+        _warn_tls(name, url, cfg.dialect)
         connect_args = DIALECT_CONNECT_ARGS[cfg.dialect](cfg.statement_timeout_s)
         engine = create_engine(
-            cfg.resolved_url(),
+            url,
             pool_pre_ping=True,
             pool_recycle=1800,
             connect_args=connect_args,

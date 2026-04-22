@@ -29,3 +29,24 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    environment:
+      CLICKHOUSE_DB: testdb
+      CLICKHOUSE_USER: ai_readonly
+      CLICKHOUSE_PASSWORD: ropw
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "81239:8123"
+    volumes:
+      - ./fixtures/clickhouse-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

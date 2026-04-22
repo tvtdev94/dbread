@@ -39,6 +39,18 @@ dbread is a single-process Python MCP server that proxies **read-only** SQL quer
                                   └─────────┘      └────────┘       └─────────┘
 ```
 
+## Supported Dialects
+
+| `dialect` | DB engine | Extras (optional) | Layer-0 approach |
+|-----------|-----------|-------------------|------------------|
+| `postgres` | PostgreSQL 12+ (incl. Cockroach, Timescale, Aurora PG, Yugabyte) | `dbread[postgres]` | read-only DB user + `default_transaction_read_only` |
+| `mysql` | MySQL 8+ (incl. Aurora MySQL, SingleStore, PlanetScale) | `dbread[mysql]` | read-only DB user + `GRANT SELECT` |
+| `mssql` | SQL Server 2019+ | `dbread[mssql]` | `db_datareader` role + `DENY EXECUTE` |
+| `sqlite` | SQLite 3 | (built-in) | `mode=ro&uri=true` URL + file perms |
+| `oracle` | Oracle 19c+ | `dbread[oracle]` | per-table `GRANT SELECT` + resource profile |
+| `duckdb` | DuckDB 1.x | `dbread[duckdb]` | `access_mode=read_only` URL + file perms |
+| `clickhouse` | ClickHouse 24+ | `dbread[clickhouse]` | `readonly` profile + connect-arg `readonly=1` |
+
 ## 5-Layer Defense in Depth
 
 | Layer | Mechanism | Rejects |

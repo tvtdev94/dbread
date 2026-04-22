@@ -65,3 +65,49 @@ def test_get_config_returns_connection_config(sqlite_config_yaml: Path) -> None:
     cfg = mgr.get_config("mem")
     assert cfg.dialect == "sqlite"
     assert cfg.max_rows == 1000
+
+
+def test_tls_warn_fires_when_missing(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    import contextlib
+
+    from dbread.config import ConnectionConfig, Settings
+    from dbread.connections import ConnectionManager
+
+    s = Settings(
+        connections={
+            "p": ConnectionConfig(url="postgresql+psycopg2://u:p@h:5432/db", dialect="postgres"),
+        },
+    )
+    mgr = ConnectionManager(s)
+    with caplog.at_level("WARNING", logger="dbread.connections"), contextlib.suppress(Exception):
+        mgr.get_engine("p")  # no driver installed; still triggers TLS check first
+    assert any("no TLS hint" in r.message for r in caplog.records)
+
+
+def test_tls_warn_silent_with_sslmode(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    import contextlib
+
+    from dbread.config import ConnectionConfig, Settings
+    from dbread.connections import ConnectionManager
+
+    s = Settings(
+        connections={
+            "p": ConnectionConfig(
+                url="postgresql+psycopg2://u:p@h:5432/db?sslmode=require",
+                dialect="postgres",
+            ),
+        },
+    )
+    mgr = ConnectionManager(s)
+    with caplog.at_level("WARNING", logger="dbread.connections"), contextlib.suppress(Exception):
+        mgr.get_engine("p")
+    assert not any("no TLS hint" in r.message for r in caplog.records)
+
+
+def test_tls_warn_skipped_for_sqlite(sqlite_config_yaml: Path, caplog) -> None:
+    settings = Settings.load(sqlite_config_yaml)
+    mgr = ConnectionManager(settings)
+    with caplog.at_level("WARNING", logger="dbread.connections"):
+        mgr.get_engine("mem")
+    assert not any("no TLS hint" in r.message for r in caplog.records)
+    mgr.close_all()

@@ -204,6 +204,103 @@ Any `INSERT/UPDATE/DELETE/CREATE` will fail with `attempt to write a readonly da
 
 ---
 
+## DuckDB
+
+DuckDB is file-based (like SQLite) — no user system. Read-only is enforced by
+the `access_mode=read_only` URL parameter plus filesystem permissions.
+
+### 1. Install extras
+
+```bash
+uv tool install "dbread[duckdb]"
+```
+
+### 2. File permission
+
+```bash
+chmod 444 analytics.duckdb        # Unix
+attrib +r analytics.duckdb        # Windows PowerShell
+```
+
+### 3. Connection string
+
+```
+duckdb:///path/to/analytics.duckdb?access_mode=read_only
+```
+
+### 4. Layer-1 guard caveat
+
+dbread blocks `read_csv`, `read_parquet`, `read_json*` — DuckDB's file-reader
+functions — because they bypass DB-user isolation and can reach arbitrary
+filesystem paths. Pre-ingest CSV/Parquet into the DuckDB file instead, or
+fork the project and relax the blacklist if you trust all prompts.
+
+---
+
+## ClickHouse
+
+### 1. Install extras
+
+```bash
+uv tool install "dbread[clickhouse]"
+```
+
+### 2. Create read-only user (recommend the built-in `readonly` profile)
+
+```sql
+-- As admin
+CREATE USER ai_readonly IDENTIFIED BY 'CHANGEME_strong_password'
+  SETTINGS PROFILE 'readonly';
+GRANT SELECT ON testdb.* TO ai_readonly;
+```
+
+Alternate: wire a custom `readonly` profile in `users.xml`:
+
+```xml
+<profiles>
+  <readonly>
+    <readonly>1</readonly>
+    <max_execution_time>30</max_execution_time>
+  </readonly>
+</profiles>
+```
+
+### 3. Connection string (HTTP, recommended)
+
+```
+clickhouse+http://ai_readonly:password@host:8123/testdb
+```
+
+dbread additionally passes `readonly=1` and `max_execution_time` via
+connect args, so even if the profile is mis-wired writes are still blocked.
+
+### 4. Layer-1 guard caveat
+
+`url`, `s3`, `hdfs`, `remote`, `mysql_table`, `postgresql_table`,
+`mongodb` table functions are blacklisted — they can reach external systems
+and evade the Layer-0 DB boundary.
+
+---
+
+## Compatible databases (no new dialect needed)
+
+These DBs speak a PG or MySQL wire protocol, so point dbread at them with
+the corresponding `dialect` value — security layers apply unchanged.
+
+| DB                   | Use `dialect` | Notes                                              |
+|----------------------|---------------|----------------------------------------------------|
+| CockroachDB          | `postgres`    | `postgresql+psycopg2://` URL                       |
+| TimescaleDB          | `postgres`    | Drop-in PG extension                               |
+| Amazon Aurora PG     | `postgres`    | Plain PG driver                                    |
+| Amazon Aurora MySQL  | `mysql`       | Plain MySQL driver                                 |
+| SingleStore (MemSQL) | `mysql`       | MySQL 5.7 wire protocol                            |
+| YugabyteDB           | `postgres`    | YSQL = PG-compatible                               |
+| PlanetScale          | `mysql`       | Vitess MySQL                                       |
+
+Follow the PostgreSQL / MySQL sections above for Layer-0 setup.
+
+---
+
 ## Verification Checklist (all DBs)
 
 - [ ] `SELECT 1` works
