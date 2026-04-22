@@ -1,0 +1,31 @@
+services:
+  pg:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: adminpw
+      POSTGRES_DB: testdb
+    ports:
+      - "54329:5432"
+    volumes:
+      - ./fixtures/pg-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "admin"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: adminpw
+      MYSQL_DATABASE: testdb
+    ports:
+      - "33069:3306"
+    volumes:
+      - ./fixtures/mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-padminpw"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

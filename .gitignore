@@ -1,0 +1,29 @@
+# Secrets / runtime config
+.env
+config.yaml
+*.jsonl
+
+# Python build / cache
+__pycache__/
+*.egg-info/
+*.pyc
+.venv/
+dist/
+build/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Local Claude Code session state
+.claude/
+.mcp.json

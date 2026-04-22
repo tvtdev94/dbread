@@ -1,0 +1,161 @@
+"""MCP server entry point - stdio transport, registers 5 tools."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+from mcp.server import NotificationOptions, Server
+from mcp.server.models import InitializationOptions
+from mcp.server.stdio import stdio_server
+from mcp.types import TextContent, Tool
+
+from .audit import AuditLogger
+from .config import Settings
+from .connections import ConnectionManager
+from .rate_limiter import RateLimiter
+from .sql_guard import SqlGuard
+from .tools import ToolError, ToolHandlers
+
+logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+log = logging.getLogger("dbread")
+
+SERVER_NAME = "dbread"
+SERVER_VERSION = "0.1.0"
+
+
+def _tool_schemas() -> list[Tool]:
+    return [
+        Tool(
+            name="list_connections",
+            description="List all configured database connections with their dialects.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="list_tables",
+            description="List tables in a configured database connection.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "connection": {"type": "string", "description": "Connection name"},
+                    "schema": {"type": "string", "description": "Optional schema filter"},
+                },
+                "required": ["connection"],
+            },
+        ),
+        Tool(
+            name="describe_table",
+            description="Describe columns (name, type, nullable, pk) and indexes of a table.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "connection": {"type": "string"},
+                    "table": {"type": "string"},
+                    "schema": {"type": "string"},
+                },
+                "required": ["connection", "table"],
+            },
+        ),
+        Tool(
+            name="query",
+            description=(
+                "Run a read-only SELECT/WITH query. DML/DDL is rejected. "
+                "Results are auto-limited and rate-limited. All calls are audited."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "connection": {"type": "string"},
+                    "sql": {"type": "string"},
+                    "max_rows": {"type": "integer", "minimum": 1},
+                },
+                "required": ["connection", "sql"],
+            },
+        ),
+        Tool(
+            name="explain",
+            description="Return the query execution plan for a read-only SELECT.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "connection": {"type": "string"},
+                    "sql": {"type": "string"},
+                },
+                "required": ["connection", "sql"],
+            },
+        ),
+    ]
+
+
+async def _run() -> None:
+    config_path = os.environ.get("DBREAD_CONFIG", "config.yaml")
+    # Auto-load sibling .env so url_env references resolve without leaking
+    # credentials into the MCP config.
+    env_path = Path(config_path).resolve().parent / ".env"
+    if env_path.is_file():
+        load_dotenv(env_path, override=False)
+    settings = Settings.load(config_path)
+
+    cm = ConnectionManager(settings)
+    handlers = ToolHandlers(
+        settings=settings,
+        conn_mgr=cm,
+        guard=SqlGuard(),
+        rate_limiter=RateLimiter(settings),
+        audit=AuditLogger(settings.audit.path, settings.audit.rotate_mb),
+    )
+
+    server: Server = Server(SERVER_NAME)
+    schemas = _tool_schemas()
+
+    @server.list_tools()
+    async def _list_tools() -> list[Tool]:
+        return schemas
+
+    @server.call_tool()
+    async def _call_tool(name: str, arguments: dict | None) -> list[TextContent]:
+        args = arguments or {}
+        try:
+            fn = getattr(handlers, name, None)
+            if fn is None:
+                payload = {"error": f"unknown_tool: {name}"}
+            else:
+                payload = fn(**args)
+        except ToolError as e:
+            payload = {"error": str(e)}
+        except TypeError as e:
+            payload = {"error": f"invalid_arguments: {e}"}
+        except Exception as e:
+            log.exception("tool error")
+            payload = {"error": f"internal: {type(e).__name__}"}
+        return [TextContent(type="text", text=json.dumps(payload, default=str, ensure_ascii=False))]
+
+    try:
+        async with stdio_server() as (reader, writer):
+            await server.run(
+                reader,
+                writer,
+                InitializationOptions(
+                    server_name=SERVER_NAME,
+                    server_version=SERVER_VERSION,
+                    capabilities=server.get_capabilities(
+                        notification_options=NotificationOptions(),
+                        experimental_capabilities={},
+                    ),
+                ),
+            )
+    finally:
+        cm.close_all()
+
+
+def main() -> None:
+    asyncio.run(_run())
+
+
+if __name__ == "__main__":
+    main()
