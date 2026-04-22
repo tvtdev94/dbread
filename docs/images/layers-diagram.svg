@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 360" width="900" height="360" role="img" aria-labelledby="title">
+  <title id="title">Defense in Depth - 5 Layers</title>
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#141931"/>
+    </linearGradient>
+    <linearGradient id="l0" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#dc2626"/><stop offset="1" stop-color="#991b1b"/></linearGradient>
+    <linearGradient id="l1" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ea580c"/><stop offset="1" stop-color="#9a3412"/></linearGradient>
+    <linearGradient id="l2" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#d97706"/><stop offset="1" stop-color="#92400e"/></linearGradient>
+    <linearGradient id="l3" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#0891b2"/><stop offset="1" stop-color="#155e75"/></linearGradient>
+    <linearGradient id="l4" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7c3aed"/><stop offset="1" stop-color="#5b21b6"/></linearGradient>
+  </defs>
+
+  <rect width="900" height="360" fill="url(#bg2)"/>
+
+  <!-- Title -->
+  <text x="450" y="34" text-anchor="middle" fill="#e0f2fe" font-family="'Inter', sans-serif" font-size="19" font-weight="800">Defense in Depth — 5 Layers</text>
+  <text x="450" y="54" text-anchor="middle" fill="#64748b" font-family="'Inter', sans-serif" font-size="12">Every layer rejects a specific class of threat. Bypass one → the next still blocks.</text>
+
+  <!-- Layers (concentric / stacked bars) -->
+  <g font-family="'Inter', 'Segoe UI', sans-serif">
+    <!-- Layer 0 -->
+    <rect x="60" y="80" width="780" height="40" rx="6" fill="url(#l0)" opacity="0.95"/>
+    <text x="80" y="106" fill="#fff" font-size="14" font-weight="700">Layer 0</text>
+    <text x="170" y="98" fill="#fff" font-size="13" font-weight="600">DB user with GRANT SELECT only</text>
+    <text x="170" y="114" fill="#fecaca" font-size="11">Non-bypassable. Even if every other layer fails, the DB itself refuses writes.</text>
+    <text x="820" y="106" text-anchor="end" fill="#fca5a5" font-size="11" font-weight="700">MANDATORY</text>
+
+    <!-- Layer 1 -->
+    <rect x="60" y="130" width="780" height="40" rx="6" fill="url(#l1)" opacity="0.95"/>
+    <text x="80" y="156" fill="#fff" font-size="14" font-weight="700">Layer 1</text>
+    <text x="170" y="148" fill="#fff" font-size="13" font-weight="600">sqlglot AST validation</text>
+    <text x="170" y="164" fill="#fed7aa" font-size="11">Rejects DML / DDL / DCL, multi-statement, CTE-DML, blacklisted functions.</text>
+
+    <!-- Layer 2 -->
+    <rect x="60" y="180" width="780" height="40" rx="6" fill="url(#l2)" opacity="0.95"/>
+    <text x="80" y="206" fill="#fff" font-size="14" font-weight="700">Layer 2</text>
+    <text x="170" y="198" fill="#fff" font-size="13" font-weight="600">Rate limit + statement_timeout</text>
+    <text x="170" y="214" fill="#fde68a" font-size="11">Token bucket per connection (60 req/min default). DB-side timeout 30s.</text>
+
+    <!-- Layer 3 -->
+    <rect x="60" y="230" width="780" height="40" rx="6" fill="url(#l3)" opacity="0.95"/>
+    <text x="80" y="256" fill="#fff" font-size="14" font-weight="700">Layer 3</text>
+    <text x="170" y="248" fill="#fff" font-size="13" font-weight="600">Auto-inject LIMIT N</text>
+    <text x="170" y="264" fill="#a5f3fc" font-size="11">Bounded result sets. Prevents accidental full-table scans from AI.</text>
+
+    <!-- Layer 4 -->
+    <rect x="60" y="280" width="780" height="40" rx="6" fill="url(#l4)" opacity="0.95"/>
+    <text x="80" y="306" fill="#fff" font-size="14" font-weight="700">Layer 4</text>
+    <text x="170" y="298" fill="#fff" font-size="13" font-weight="600">Audit log (JSONL)</text>
+    <text x="170" y="314" fill="#ddd6fe" font-size="11">Every call — ok + rejected — timestamp, SQL, reason. grep / jq friendly.</text>
+  </g>
+
+  <text x="450" y="344" text-anchor="middle" fill="#475569" font-family="'Inter', sans-serif" font-size="10" font-style="italic">Belt + suspenders: Layer 0 guarantees; Layers 1-4 make attacks loud and rare.</text>
+</svg>

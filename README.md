@@ -1,111 +1,282 @@
-# dbread
+<div align="center">
 
-Read-only DB MCP proxy for AI. Gives Claude Code unified `SELECT` access to multiple databases with guardrails.
+<img src="docs/images/hero-banner.svg" alt="dbread - Read-only DB MCP Proxy for AI" width="100%" />
 
-## Why
+# `dbread`
 
-Don't hand raw connection strings to AI. dbread enforces **defense in depth**:
+### Read-only database MCP proxy for AI — safe `SELECT` access with 5-layer defense
 
-1. **DB user read-only** (you configure) — Layer 0
-2. **sqlglot AST validation** — rejects DML / DDL / DCL
-3. **Rate limit + statement timeout** — prevents runaway loops
-4. **Auto `LIMIT` injection** — bounded result sets
-5. **Audit log** — every query, `ok` or `rejected`
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
+[![MCP](https://img.shields.io/badge/MCP-1.27+-6e56cf?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io/)
+[![Tests](https://img.shields.io/badge/tests-97%20passing-22c55e)](#-testing)
+[![Coverage](https://img.shields.io/badge/coverage-80%25-0891b2)](#-testing)
+[![Built with uv](https://img.shields.io/badge/built%20with-uv-de5fe9)](https://docs.astral.sh/uv/)
+[![License MIT](https://img.shields.io/badge/license-MIT-94a3b8)](LICENSE)
 
-See [docs/architecture.md](docs/architecture.md) and [docs/security-threat-model.md](docs/security-threat-model.md).
+[**Why**](#-why) · [**Quickstart**](#-quickstart-5-minutes) · [**Tools**](#-tools) · [**Security Model**](#%EF%B8%8F-security-model) · [**Docs**](#-docs)
 
-## Quickstart (5 minutes)
+</div>
 
-### 1. Install
+---
+
+## 🤔 Why
+
+Handing a raw database connection string to an AI is like handing a stranger your car keys. They *probably* won't crash it, but you wouldn't bet the car on it.
+
+**dbread sits between your AI and your DBs** and enforces read-only access through **five independent layers** — if one layer has a bug, the next one still blocks you.
+
+<div align="center">
+<img src="docs/images/layers-diagram.svg" alt="5-layer defense in depth" width="100%" />
+</div>
+
+---
+
+## ⚡ Quickstart (5 minutes)
 
 ```bash
-git clone <repo> dbread && cd dbread
-# pick the driver(s) you need (combine freely):
+# 1. Clone
+git clone https://github.com/tvtdev94/dbread
+cd dbread
+
+# 2. Install (pick the DB drivers you need — combine freely)
 uv sync --extra postgres --extra mysql --extra dev
-```
 
-### 2. Configure the read-only DB user (do this first)
+# 3. Create a READ-ONLY DB user — see docs/setup-db-readonly.md
+#    (copy-paste SQL snippets for PG / MySQL / MSSQL / Oracle / SQLite)
 
-See [docs/setup-db-readonly.md](docs/setup-db-readonly.md) for your DB engine. **This is the non-bypassable guarantee** — dbread's guard is a belt, the DB user is the suspenders.
-
-### 3. Config file
-
-```bash
+# 4. Configure
 cp config.example.yaml config.yaml
 cp .env.example .env
 # edit both: set your connection URL (prefer the url_env pattern)
+
+# 5. Register with Claude Code (global — works from any directory)
+claude mcp add --scope user dbread -- uv --directory ABSOLUTE\PATH\TO\dbread run dbread
+
+# 6. Restart Claude Code → type /mcp → dbread appears
 ```
 
-### 4. Register with Claude Code
+Ask Claude: *"List connections in dbread, then count rows per status in the orders table."*
 
-Add to `~/.claude/mcp_servers.json` (or the platform equivalent):
+---
 
-```json
-{
-  "mcpServers": {
-    "dbread": {
-      "command": "uv",
-      "args": ["--directory", "/abs/path/to/dbread", "run", "dbread"],
-      "env": {
-        "DBREAD_CONFIG": "/abs/path/to/dbread/config.yaml"
-      }
-    }
-  }
-}
+## 🏗️ Architecture
+
+```mermaid
+flowchart LR
+    subgraph Client["🤖 Claude Code"]
+        AI[AI Agent]
+    end
+    subgraph dbread["🛡️ dbread MCP Server"]
+        direction TB
+        Tools[5 MCP Tools<br/>list_connections · list_tables<br/>describe_table · query · explain]
+        Guard[sqlglot AST Guard]
+        Rate[Token Bucket<br/>Rate Limiter]
+        Audit[JSONL Audit]
+        Tools --> Guard
+        Guard --> Rate
+        Rate --> Audit
+    end
+    subgraph DBs["🗄️ Your Databases (Read-Only Users)"]
+        PG[(Postgres)]
+        MY[(MySQL)]
+        LT[(SQLite)]
+        MS[(MSSQL)]
+        OR[(Oracle)]
+    end
+    AI -.stdio JSON.-> Tools
+    Audit --> PG & MY & LT & MS & OR
+
+    style Client fill:#0f1935,stroke:#22d3ee,color:#fff
+    style dbread fill:#1a1033,stroke:#a855f7,color:#fff
+    style DBs fill:#0f1b1a,stroke:#10b981,color:#fff
 ```
 
-### 5. Use it
+**Data flow for a `query` call:**
 
-In Claude Code, just ask: *"What tables are in analytics_prod?"*
+```mermaid
+sequenceDiagram
+    participant AI as Claude
+    participant T as tools.query
+    participant G as SqlGuard
+    participant R as RateLimiter
+    participant D as Database
+    participant A as Audit
 
-Claude will invoke:
+    AI->>T: query(sql, connection)
+    T->>G: validate(sql, dialect)
+    alt SQL is DML/DDL
+        G-->>T: rejected
+        T->>A: log(rejected, reason)
+        T-->>AI: ❌ sql_guard error
+    else SQL is SELECT
+        G->>T: ✓ plus inject LIMIT N
+        T->>R: acquire(connection)
+        alt Rate limit hit
+            R-->>T: denied
+            T->>A: log(rejected, rate_limit)
+            T-->>AI: ❌ rate_limit_exceeded
+        else Rate limit OK
+            R->>T: ✓
+            T->>D: execute(sql)
+            D-->>T: rows
+            T->>A: log(ok, rows, ms)
+            T-->>AI: ✅ rows JSON
+        end
+    end
+```
 
-- `list_connections` → picks `analytics_prod`
-- `list_tables` → returns the table list
-- `describe_table` → shows columns and indexes
-- `query` → runs a `SELECT`
+---
 
-Rejected examples (Claude learns to adapt):
+## 🧰 Tools
 
-- `UPDATE users ...` → `sql_guard: node_rejected: Update`
-- `WITH d AS (DELETE ...) SELECT ...` → `sql_guard: node_rejected: Delete`
-- `SELECT 1; DROP TABLE x` → `sql_guard: multi_statement_not_allowed`
+| Tool | Purpose | Input |
+|------|---------|-------|
+| `list_connections` | Configured connections + dialects | — |
+| `list_tables` | Tables in a connection | `connection`, `schema?` |
+| `describe_table` | Columns, types, nullability, PKs, indexes | `connection`, `table`, `schema?` |
+| `query` | Run `SELECT`/`WITH`/`EXPLAIN`/`SHOW`. Auto-limited. Rate-limited. Audited. | `connection`, `sql`, `max_rows?` |
+| `explain` | Query execution plan | `connection`, `sql` |
 
-## Tools
+---
 
-| Tool | Purpose |
-|------|---------|
-| `list_connections` | Configured connections + dialects |
-| `list_tables` | Tables in a connection |
-| `describe_table` | Columns, types, indexes |
-| `query` | Run `SELECT` / `WITH`. Auto-limited. Rate-limited. Audited. |
-| `explain` | Query plan (`EXPLAIN`) |
+## 🛡️ Security Model
 
-## Audit Log
+| Layer | Mechanism | What it rejects |
+|:-:|---|---|
+| **0** | DB user with `GRANT SELECT` only | **All writes — mandatory, non-bypassable** |
+| **1** | `sqlglot` AST validation | `INSERT` · `UPDATE` · `DELETE` · `MERGE` · `CREATE` · `ALTER` · `DROP` · `TRUNCATE` · `GRANT` · `REVOKE` · multi-statement (`SELECT 1; DROP...`) · **PG CTE-DML trick** (`WITH d AS (DELETE...) SELECT...`) · function blacklist (`pg_read_file`, `xp_cmdshell`, `load_file`, `dblink_exec`, …) |
+| **2** | Rate limit + `statement_timeout` | Runaway loops · long-running queries |
+| **3** | Auto-inject `LIMIT N` | Oversized result sets |
+| **4** | JSONL audit log | *(detection, not prevention — grep-friendly forensics)* |
 
-Append-only JSONL at the `audit.path` from your config. One record per query (ok + rejected). Auto-rotates at `rotate_mb`.
+> 💡 **Principle:** Never rely on a single layer. Layer 0 is the guarantee; Layers 1–4 make attacks loud and rare.
+
+Full threat model: [`docs/security-threat-model.md`](docs/security-threat-model.md) (STRIDE analysis).
+
+---
+
+## 📋 Example Prompts
+
+```
+💬 "List connections in dbread."
+💬 "Describe the schema of the orders table in analytics_prod."
+💬 "Top 10 customers by lifetime value — use dbread."
+💬 "Run EXPLAIN on: SELECT ... ORDER BY created_at"
+```
+
+```
+💬 "Update user 1 to 'hacked'."
+   → ❌ sql_guard: node_rejected: Update
+
+💬 "WITH d AS (DELETE FROM users RETURNING *) SELECT * FROM d"
+   → ❌ sql_guard: node_rejected: Delete   (PG CTE-DML blocked)
+
+💬 "SELECT 1; DROP TABLE users;"
+   → ❌ sql_guard: multi_statement_not_allowed
+```
+
+---
+
+## 📜 Audit Log
+
+Every call lands in `audit.jsonl` — one JSON per line, append-only, auto-rotated at 50 MB.
+
+```jsonc
+{"ts":"2026-04-22T19:30:12+07:00","conn":"analytics","sql":"SELECT * FROM users LIMIT 100","rows":100,"ms":42,"status":"ok"}
+{"ts":"2026-04-22T19:30:15+07:00","conn":"analytics","sql":"DELETE FROM users","rows":0,"ms":0,"status":"rejected","reason":"node_rejected: Delete"}
+```
 
 ```bash
-jq '.' audit.jsonl                            # pretty
-jq 'select(.status=="rejected")' audit.jsonl  # just rejections
-jq 'select(.ms > 1000)' audit.jsonl           # slow queries
+jq 'select(.status=="rejected")' audit.jsonl     # just rejections
+jq 'select(.ms > 1000)' audit.jsonl              # slow queries
+jq -s 'group_by(.status)|map({s:.[0].status,n:length})' audit.jsonl   # counts
 ```
 
-## Development
+---
+
+## 🗂️ Config
+
+`config.yaml` (gitignored — safe to edit with real values):
+
+```yaml
+connections:
+  analytics_prod:
+    url_env: ANALYTICS_PROD_URL        # credentials from .env
+    dialect: postgres
+    rate_limit_per_min: 60
+    statement_timeout_s: 30
+    max_rows: 1000
+
+  local_mysql:
+    url: mysql+pymysql://readonly:pw@localhost/shop
+    dialect: mysql
+    rate_limit_per_min: 120
+    statement_timeout_s: 15
+    max_rows: 500
+
+audit:
+  path: ./audit.jsonl
+  rotate_mb: 50
+```
+
+Supported dialects: `postgres` · `mysql` · `mssql` · `sqlite` · `oracle`.
+
+---
+
+## 🧪 Testing
 
 ```bash
 uv sync --extra dev
-uv run pytest
-uv run pytest --cov=dbread --cov-report=term
-uv run ruff check src/
+uv run pytest                          # 97 passing
+uv run pytest --cov=dbread             # coverage report
+uv run ruff check src/                 # lint
+
+# Integration tests with real PG + MySQL (needs Docker):
+cd tests/integration && docker compose up -d
+uv run pytest tests/integration/ -v
 ```
 
-## Docs
+- **89 unit tests** cover config, connections, audit, SQL guard (**48 evasion cases**), rate limiter, tools.
+- **4 SQLite E2E tests** always run.
+- **4 PG + 4 MySQL E2E tests** skip gracefully without Docker.
 
-- [docs/setup-db-readonly.md](docs/setup-db-readonly.md) — Layer 0 DB user setup (**mandatory**)
-- [docs/architecture.md](docs/architecture.md) — system design and data flow
-- [docs/security-threat-model.md](docs/security-threat-model.md) — STRIDE analysis
+---
 
-## Status
+## 📚 Docs
 
-`v0.1.0` — core features complete: 5 MCP tools, 5-layer defense, 89+ unit tests. See `plans/` for roadmap.
+| Document | What's in it |
+|----------|--------------|
+| [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) | **Copy-paste SQL** for Layer 0 DB user on PG / MySQL / MSSQL / Oracle / SQLite |
+| [`docs/architecture.md`](docs/architecture.md) | Component diagram · 5-layer details · data flow · design decisions |
+| [`docs/security-threat-model.md`](docs/security-threat-model.md) | Full STRIDE analysis · residual risks · response plan |
+| [`docs/manual-smoke-test.md`](docs/manual-smoke-test.md) | Step-by-step checklist for verifying integration with Claude Code |
+| [`plans/`](plans/) | Brainstorm + 7-phase implementation plan (how it was built) |
+
+---
+
+## 🧱 Project Layout
+
+```
+src/dbread/
+├── server.py         # MCP stdio entry — registers 5 tools
+├── tools.py          # tool handlers (guard → limit → rate → exec → audit)
+├── sql_guard.py      # sqlglot AST validator + LIMIT injection
+├── rate_limiter.py   # thread-safe token bucket per connection
+├── connections.py    # SQLAlchemy engine manager (lazy, per-dialect)
+├── config.py         # pydantic Settings (YAML + env)
+└── audit.py          # append-only JSONL with size rotation
+```
+
+Every source file is **under 200 LOC** — designed to be readable end-to-end.
+
+---
+
+## 🙏 Credits
+
+Built with [`mcp`](https://modelcontextprotocol.io/) · [`sqlglot`](https://sqlglot.com/) · [`SQLAlchemy 2.x`](https://www.sqlalchemy.org/) · [`pydantic`](https://docs.pydantic.dev/) · [`uv`](https://docs.astral.sh/uv/).
+
+---
+
+<div align="center">
+<sub>Made with ❤️ for developers who want AI productivity <strong>without</strong> giving up database safety.</sub>
+</div>
