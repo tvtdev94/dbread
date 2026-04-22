@@ -224,7 +224,6 @@ uv run pytest tests/integration/ -v
 | [`docs/architecture.md`](docs/architecture.md) | Component diagram · 5-layer details · data flow · design decisions |
 | [`docs/security-threat-model.md`](docs/security-threat-model.md) | Full STRIDE analysis · residual risks · response plan |
 | [`docs/manual-smoke-test.md`](docs/manual-smoke-test.md) | Step-by-step checklist for verifying integration with Claude Code |
-| [`plans/`](plans/) | Brainstorm + 7-phase implementation plan (how it was built) |
 
 ---
 

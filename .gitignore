@@ -27,3 +27,9 @@ htmlcov/
 # Local Claude Code session state
 .claude/
 .mcp.json
+
+# Internal development artifacts (not for public repo)
+plans/
+dist/
+audit.jsonl
+sample.db
