@@ -1,0 +1,29 @@
+# dbread config - copy to config.yaml and edit.
+# Layer 0 security: use ONLY read-only DB users here (see docs/setup-db-readonly.md).
+# config.yaml is gitignored - never commit it.
+
+connections:
+  analytics_prod:
+    url_env: ANALYTICS_PROD_URL        # preferred: load from env var
+    dialect: postgres
+    rate_limit_per_min: 60
+    statement_timeout_s: 30
+    max_rows: 1000
+
+  local_mysql:
+    url: mysql+pymysql://readonly:pw@localhost/shop  # or inline (less secure)
+    dialect: mysql
+    rate_limit_per_min: 120
+    statement_timeout_s: 15
+    max_rows: 500
+
+  local_sqlite:
+    url: sqlite:///./sample.db?mode=ro&uri=true
+    dialect: sqlite
+    rate_limit_per_min: 300
+    statement_timeout_s: 10
+    max_rows: 2000
+
+audit:
+  path: ./audit.jsonl
+  rotate_mb: 50
