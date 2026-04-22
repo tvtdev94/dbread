@@ -4,6 +4,23 @@ All notable changes to this project are documented here. This project adheres to
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-04-22
+
+Onboarding UX patch.
+
+### Added
+
+- **`dbread init` subcommand** — scaffolds `~/.dbread/{config.yaml, .env, sample.db}`
+  in one step. `sample.db` ships with a tiny demo table so the MCP client
+  works immediately after registration. Idempotent (skips existing files).
+- **`dbread --version` / `--help`** — basic CLI affordances.
+
+### Fixed
+
+- Quickstart flow no longer requires the user to hand-edit paths or copy
+  config templates. SQLite URL in the generated config uses an absolute
+  path (SQLite URI does not expand `~`).
+
 ## [0.2.0] - 2026-04-22
 
 Production polish — CI, async safety, audit hardening, and two new dialects.

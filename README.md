@@ -10,7 +10,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-1.27+-6e56cf?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io/)
 [![CI](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml/badge.svg)](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-122%20passing-22c55e)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-130%20passing-22c55e)](#-testing)
 [![Coverage](https://img.shields.io/badge/coverage-92%25-0891b2)](#-testing)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-de5fe9)](https://docs.astral.sh/uv/)
 [![License MIT](https://img.shields.io/badge/license-MIT-94a3b8)](LICENSE)
@@ -45,7 +45,15 @@ uv tool install "dbread[postgres]"          # extras: postgres, mysql, mssql, or
 uv tool install "git+https://github.com/tvtdev94/dbread[postgres]"
 ```
 
-### 2. Create a read-only DB user
+### 2. Scaffold config (one command)
+
+```bash
+dbread init
+```
+
+Creates `~/.dbread/config.yaml`, `~/.dbread/.env`, and `~/.dbread/sample.db` (a tiny read-only SQLite demo so everything works immediately). Prints the exact `claude mcp add` line to paste in step 4. Skip to step 4 if you only want the demo; otherwise edit `config.yaml` / `.env` first (step 3).
+
+### 2b. Create a read-only DB user (when pointing at a real DB)
 
 See [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) — copy-paste SQL snippets for PostgreSQL / MySQL / MSSQL / Oracle / SQLite / DuckDB / ClickHouse, plus compat notes for CockroachDB · Timescale · Aurora · SingleStore · PlanetScale · Yugabyte.
 

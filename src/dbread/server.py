@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.2.1"
 
 
 def _tool_schemas() -> list[Tool]:
@@ -161,6 +161,19 @@ async def _run() -> None:
 
 
 def main() -> None:
+    args = sys.argv[1:]
+    if args:
+        if args[0] in {"-h", "--help", "help"}:
+            from .cli import print_help
+            sys.exit(print_help())
+        if args[0] in {"-V", "--version", "version"}:
+            print(f"dbread {SERVER_VERSION}")
+            return
+        if args[0] == "init":
+            from .cli import init_config
+            sys.exit(init_config())
+        print(f"unknown argument: {args[0]}. Try `dbread --help`.", file=sys.stderr)
+        sys.exit(2)
     asyncio.run(_run())
 
 
