@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 
 from .config import Dialect, Settings
@@ -36,7 +37,31 @@ def _mysql_args(timeout_s: int) -> dict[str, Any]:
 
 
 def _mssql_args(timeout_s: int) -> dict[str, Any]:
+    # pyodbc `timeout=` kwarg is LOGIN timeout only (SQL_ATTR_LOGIN_TIMEOUT).
+    # Per-query timeout is wired separately via an on-connect event — see
+    # `_install_mssql_query_timeout` below.
     return {"timeout": timeout_s}
+
+
+def _apply_pyodbc_query_timeout(dbapi_connection: Any, timeout_s: int) -> None:
+    """Assign `cnxn.timeout = N` on a pyodbc Connection (no-op on other drivers).
+
+    pyodbc's Connection.timeout attribute bounds every cursor created by that
+    connection. The `timeout=` kwarg passed to `pyodbc.connect()` only affects
+    login — it does NOT bound query runtime. Hence this post-connect step.
+    """
+    # Non-pyodbc DBAPI (user may pin a different driver) may reject the
+    # attribute assignment; swallow rather than crash the connection.
+    with contextlib.suppress(AttributeError, TypeError):
+        dbapi_connection.timeout = timeout_s
+
+
+def _install_mssql_query_timeout(engine: Engine, timeout_s: int) -> None:
+    """Register the on-connect listener that enforces per-query timeout."""
+
+    @event.listens_for(engine, "connect")
+    def _set_query_timeout(dbapi_connection, _connection_record) -> None:
+        _apply_pyodbc_query_timeout(dbapi_connection, timeout_s)
 
 
 def _sqlite_args(_timeout_s: int) -> dict[str, Any]:
@@ -103,6 +128,8 @@ class ConnectionManager:
             connect_args=connect_args,
             echo=False,
         )
+        if cfg.dialect == "mssql":
+            _install_mssql_query_timeout(engine, cfg.statement_timeout_s)
         self._engines[name] = engine
         return engine
 

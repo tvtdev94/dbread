@@ -4,6 +4,19 @@ All notable changes to this project are documented here. This project adheres to
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-04-22
+
+### Fixed
+
+- **MSSQL query timeout was silently login-only.** The `timeout=` kwarg
+  passed to `pyodbc.connect()` (via SQLAlchemy `connect_args`) is
+  `SQL_ATTR_LOGIN_TIMEOUT`, not a per-query bound — a runaway SELECT
+  would still run forever driver-side. Fixed by attaching a SQLAlchemy
+  `connect` listener that sets `cnxn.timeout = statement_timeout_s` on
+  every new pyodbc Connection, bounding each cursor it creates.
+- Docs (`setup-db-readonly.md` MSSQL §3) now explicitly calls out the
+  login-vs-query distinction and the two-layer client-side enforcement.
+
 ## [0.2.1] - 2026-04-22
 
 Onboarding UX patch.

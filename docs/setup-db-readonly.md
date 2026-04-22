@@ -115,10 +115,17 @@ DENY ALTER, INSERT, UPDATE, DELETE TO ai_readonly;
 
 ### 3. Query timeout
 
-MSSQL has no native per-user query timeout. Options:
+MSSQL has no native per-user query timeout. dbread enforces it client-side
+via two layers:
 
-- dbread passes pyodbc `timeout` arg (connection-level).
-- Server-wide Query Governor:
+- **Login timeout** — pyodbc `timeout=N` kwarg (seconds). Connection attempt
+  aborts if the server is unreachable for longer than this.
+- **Query timeout** — SQLAlchemy `connect` listener sets `cnxn.timeout = N`
+  on each new pyodbc Connection. This bounds every cursor: a runaway
+  SELECT is aborted by the driver after N seconds. *(The `timeout=` kwarg
+  to `pyodbc.connect()` is login-only and does NOT limit query runtime.)*
+
+Optional server-wide backstop:
 
 ```sql
 sp_configure 'query governor cost limit', 30;   -- rough cost-based limit

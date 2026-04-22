@@ -111,3 +111,40 @@ def test_tls_warn_skipped_for_sqlite(sqlite_config_yaml: Path, caplog) -> None:
         mgr.get_engine("mem")
     assert not any("no TLS hint" in r.message for r in caplog.records)
     mgr.close_all()
+
+
+def test_apply_pyodbc_query_timeout_sets_attribute() -> None:
+    """Helper must set .timeout on any object with a writable attribute dict."""
+    from dbread.connections import _apply_pyodbc_query_timeout
+
+    class MockDbapiConn:
+        pass
+
+    fake = MockDbapiConn()
+    _apply_pyodbc_query_timeout(fake, 42)
+    assert fake.timeout == 42
+
+
+def test_apply_pyodbc_query_timeout_swallows_unsupported_driver() -> None:
+    """Slotted DBAPI (non-pyodbc) must not crash the listener."""
+    from dbread.connections import _apply_pyodbc_query_timeout
+
+    class FrozenConn:
+        __slots__ = ()
+
+    _apply_pyodbc_query_timeout(FrozenConn(), 42)  # must not raise
+
+
+def test_install_mssql_query_timeout_registers_listener() -> None:
+    """_install_mssql_query_timeout must attach a pool 'connect' listener."""
+    from sqlalchemy import create_engine, event
+
+    from dbread.connections import _install_mssql_query_timeout
+
+    engine = create_engine("sqlite:///:memory:")
+    before = len(engine.pool.dispatch.connect.listeners)
+    _install_mssql_query_timeout(engine, 45)
+    after = len(engine.pool.dispatch.connect.listeners)
+    assert after == before + 1
+    assert event.contains(engine, "connect", engine.pool.dispatch.connect.listeners[-1])
+    engine.dispose()
