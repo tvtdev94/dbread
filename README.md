@@ -6,6 +6,7 @@
 
 ### Read-only database MCP proxy for AI — safe `SELECT` access with 5-layer defense
 
+[![PyPI](https://img.shields.io/pypi/v/dbread?color=3775a9&logo=pypi&logoColor=white)](https://pypi.org/project/dbread/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-1.27+-6e56cf?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io/)
 [![Tests](https://img.shields.io/badge/tests-97%20passing-22c55e)](#-testing)
