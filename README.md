@@ -31,29 +31,72 @@ Handing a raw database connection string to an AI is like handing a stranger you
 
 ---
 
-## ⚡ Quickstart (5 minutes)
+## ⚡ Quickstart (2 minutes, no clone needed)
+
+### 1. Install as a tool
 
 ```bash
-# 1. Clone
-git clone https://github.com/tvtdev94/dbread
-cd dbread
+# From PyPI (recommended):
+uv tool install "dbread[postgres]"          # + any extras: mysql, mssql, oracle
 
-# 2. Install (pick the DB drivers you need — combine freely)
-uv sync --extra postgres --extra mysql --extra dev
-
-# 3. Create a READ-ONLY DB user — see docs/setup-db-readonly.md
-#    (copy-paste SQL snippets for PG / MySQL / MSSQL / Oracle / SQLite)
-
-# 4. Configure
-cp config.example.yaml config.yaml
-cp .env.example .env
-# edit both: set your connection URL (prefer the url_env pattern)
-
-# 5. Register with Claude Code (global — works from any directory)
-claude mcp add --scope user dbread -- uv --directory ABSOLUTE\PATH\TO\dbread run dbread
-
-# 6. Restart Claude Code → type /mcp → dbread appears
+# OR straight from GitHub (no PyPI needed):
+uv tool install "git+https://github.com/tvtdev94/dbread[postgres]"
 ```
+
+### 2. Create a read-only DB user
+
+See [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) — copy-paste SQL snippets for PostgreSQL / MySQL / MSSQL / Oracle / SQLite.
+
+### 3. Create `config.yaml` + `.env`
+
+```yaml
+# ~/.dbread/config.yaml
+connections:
+  mydb:
+    url_env: MYDB_URL
+    dialect: postgres
+    rate_limit_per_min: 60
+    statement_timeout_s: 30
+    max_rows: 1000
+audit:
+  path: ~/.dbread/audit.jsonl
+  rotate_mb: 50
+```
+
+```
+# ~/.dbread/.env
+MYDB_URL=postgresql+psycopg2://ai_readonly:password@host:5432/mydb
+```
+
+### 4. Register with Claude Code
+
+```bash
+claude mcp add --scope user dbread \
+  --env DBREAD_CONFIG=/path/to/config.yaml \
+  -- dbread
+```
+
+Or without install (one-shot via `uvx`):
+```bash
+claude mcp add --scope user dbread \
+  --env DBREAD_CONFIG=/path/to/config.yaml \
+  -- uvx --from "dbread[postgres]" dbread
+```
+
+### 5. Use it
+
+Restart Claude Code → `/mcp` → `dbread` appears. Ask Claude: *"list connections in dbread, then count rows per status in the orders table."*
+
+<details>
+<summary><b>Alternative: clone the repo (for development)</b></summary>
+
+```bash
+git clone https://github.com/tvtdev94/dbread && cd dbread
+uv sync --extra postgres --extra dev
+cp config.example.yaml config.yaml && cp .env.example .env
+claude mcp add --scope user dbread -- uv --directory $(pwd) run dbread
+```
+</details>
 
 Ask Claude: *"List connections in dbread, then count rows per status in the orders table."*
 
