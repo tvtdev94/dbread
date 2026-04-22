@@ -71,7 +71,28 @@ FUNCTION_REJECT_CASES = [
     ("SELECT LOAD_FILE('/etc/passwd')", "mysql", "load_file"),
     ("SELECT sleep(10)", "mysql", "sleep"),
     ("SELECT dblink_exec('...')", "postgres", "dblink_exec"),
+    # v0.2 additions - time-based DoS
+    ("SELECT pg_sleep(5)", "postgres", "pg_sleep"),
+    ("SELECT pg_sleep_for('5 s')", "postgres", "pg_sleep_for"),
+    # dbms_lock.sleep parses with name='sleep' - caught by existing 'sleep'.
+    ("SELECT dbms_lock.sleep(1) FROM dual", "oracle", "sleep"),
+    ("SELECT dbms_session.sleep(1) FROM dual", "oracle", "sleep"),
 ]
+
+
+WAITFOR_CASES = [
+    "WAITFOR DELAY '00:00:05'",
+    "waitfor  time '23:00'",
+    "/* blah */ WAITFOR DELAY '00:00:01'",
+    "-- comment\nWAITFOR DELAY '00:00:01'",
+]
+
+
+@pytest.mark.parametrize("sql", WAITFOR_CASES)
+def test_reject_waitfor(sql: str) -> None:
+    r = guard.validate(sql, "tsql")
+    assert not r.allowed, sql
+    assert "WAITFOR" in (r.reason or "")
 
 
 @pytest.mark.parametrize("sql,dialect", ALLOW_CASES)

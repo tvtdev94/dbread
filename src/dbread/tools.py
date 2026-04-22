@@ -79,7 +79,7 @@ class ToolHandlers:
 
         result = self.guard.validate(sql, cfg.dialect)
         if not result.allowed:
-            self.audit.log(connection, sql, "rejected", reason=result.reason)
+            self.audit.log(connection, sql, "rejected", reason=result.reason, dialect=cfg.dialect)
             raise ToolError(f"sql_guard: {result.reason}")
 
         effective = (
@@ -90,7 +90,7 @@ class ToolHandlers:
         sql_to_run = self.guard.inject_limit(sql, cfg.dialect, effective)
 
         if not self.rl.acquire(connection):
-            self.audit.log(connection, sql, "rejected", reason="rate_limit")
+            self.audit.log(connection, sql, "rejected", reason="rate_limit", dialect=cfg.dialect)
             raise ToolError("rate_limit_exceeded")
 
         engine = self.cm.get_engine(connection)
@@ -103,12 +103,12 @@ class ToolHandlers:
         except Exception as e:
             ms = int((time.perf_counter() - t0) * 1000)
             self.audit.log(
-                connection, sql_to_run, "failed", ms=ms, reason=str(e)[:200]
+                connection, sql_to_run, "failed", ms=ms, reason=str(e)[:200], dialect=cfg.dialect
             )
             raise ToolError(f"db_error: {e}") from e
 
         ms = int((time.perf_counter() - t0) * 1000)
-        self.audit.log(connection, sql_to_run, "ok", rows=len(rows), ms=ms)
+        self.audit.log(connection, sql_to_run, "ok", rows=len(rows), ms=ms, dialect=cfg.dialect)
         return {
             "columns": columns,
             "rows": rows,
@@ -121,13 +121,13 @@ class ToolHandlers:
 
         result = self.guard.validate(sql, cfg.dialect)
         if not result.allowed:
-            self.audit.log(connection, sql, "rejected", reason=result.reason)
+            self.audit.log(connection, sql, "rejected", reason=result.reason, dialect=cfg.dialect)
             raise ToolError(f"sql_guard: {result.reason}")
 
         explain_sql = _build_explain(sql, cfg.dialect)
 
         if not self.rl.acquire(connection):
-            self.audit.log(connection, sql, "rejected", reason="rate_limit")
+            self.audit.log(connection, sql, "rejected", reason="rate_limit", dialect=cfg.dialect)
             raise ToolError("rate_limit_exceeded")
 
         engine = self.cm.get_engine(connection)
@@ -138,12 +138,12 @@ class ToolHandlers:
         except Exception as e:
             ms = int((time.perf_counter() - t0) * 1000)
             self.audit.log(
-                connection, explain_sql, "failed", ms=ms, reason=str(e)[:200]
+                connection, explain_sql, "failed", ms=ms, reason=str(e)[:200], dialect=cfg.dialect
             )
             raise ToolError(f"db_error: {e}") from e
 
         ms = int((time.perf_counter() - t0) * 1000)
-        self.audit.log(connection, explain_sql, "ok", rows=len(plan), ms=ms)
+        self.audit.log(connection, explain_sql, "ok", rows=len(plan), ms=ms, dialect=cfg.dialect)
         return {"plan": plan}
 
 

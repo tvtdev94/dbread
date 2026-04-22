@@ -33,6 +33,7 @@ COMPOSE = HERE / "docker-compose.yml"
 
 PG_URL = "postgresql+psycopg2://ai_readonly:ropw@localhost:54329/testdb"
 MYSQL_URL = "mysql+pymysql://ai_readonly:ropw@localhost:33069/testdb"
+CLICKHOUSE_URL = "clickhouse+http://ai_readonly:ropw@localhost:81239/testdb"
 
 
 def _docker_available() -> bool:
@@ -84,6 +85,15 @@ def mysql_url() -> Iterator[str]:
     _compose("up", "-d", "mysql")
     _wait_ready(MYSQL_URL, timeout=120)  # MySQL init takes longer
     yield MYSQL_URL
+
+
+@pytest.fixture(scope="session")
+def clickhouse_url() -> Iterator[str]:
+    if os.environ.get("SKIP_DOCKER") or not _docker_available():
+        pytest.skip("docker unavailable or SKIP_DOCKER set")
+    _compose("up", "-d", "clickhouse")
+    _wait_ready(CLICKHOUSE_URL, timeout=60)
+    yield CLICKHOUSE_URL
 
 
 def build_handlers(

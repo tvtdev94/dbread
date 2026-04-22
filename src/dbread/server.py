@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.1.1"
+SERVER_VERSION = "0.2.0"
 
 
 def _tool_schemas() -> list[Tool]:
@@ -107,7 +107,12 @@ async def _run() -> None:
         conn_mgr=cm,
         guard=SqlGuard(),
         rate_limiter=RateLimiter(settings),
-        audit=AuditLogger(settings.audit.path, settings.audit.rotate_mb),
+        audit=AuditLogger(
+            settings.audit.path,
+            settings.audit.rotate_mb,
+            timezone=settings.audit.timezone,
+            redact_literals=settings.audit.redact_literals,
+        ),
     )
 
     server: Server = Server(SERVER_NAME)
@@ -125,7 +130,9 @@ async def _run() -> None:
             if fn is None:
                 payload = {"error": f"unknown_tool: {name}"}
             else:
-                payload = fn(**args)
+                # Offload sync DB / SQLAlchemy I/O to the default thread pool so
+                # a slow query never blocks the MCP event loop.
+                payload = await asyncio.to_thread(fn, **args)
         except ToolError as e:
             payload = {"error": str(e)}
         except TypeError as e:

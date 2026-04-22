@@ -21,7 +21,9 @@ def _seed_sqlite(db_path: Path) -> None:
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"))
         conn.execute(text("CREATE INDEX idx_users_name ON users(name)"))
-        conn.execute(text("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')"))
+        conn.execute(
+            text("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')")
+        )
     engine.dispose()
 
 

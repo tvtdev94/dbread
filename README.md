@@ -9,8 +9,9 @@
 [![PyPI](https://img.shields.io/pypi/v/dbread?color=3775a9&logo=pypi&logoColor=white)](https://pypi.org/project/dbread/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-1.27+-6e56cf?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io/)
-[![Tests](https://img.shields.io/badge/tests-97%20passing-22c55e)](#-testing)
-[![Coverage](https://img.shields.io/badge/coverage-80%25-0891b2)](#-testing)
+[![CI](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml/badge.svg)](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-122%20passing-22c55e)](#-testing)
+[![Coverage](https://img.shields.io/badge/coverage-92%25-0891b2)](#-testing)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-de5fe9)](https://docs.astral.sh/uv/)
 [![License MIT](https://img.shields.io/badge/license-MIT-94a3b8)](LICENSE)
 
@@ -38,7 +39,7 @@ Handing a raw database connection string to an AI is like handing a stranger you
 
 ```bash
 # From PyPI (recommended):
-uv tool install "dbread[postgres]"          # + any extras: mysql, mssql, oracle
+uv tool install "dbread[postgres]"          # extras: postgres, mysql, mssql, oracle, duckdb, clickhouse
 
 # OR straight from GitHub (no PyPI needed):
 uv tool install "git+https://github.com/tvtdev94/dbread[postgres]"
@@ -46,7 +47,7 @@ uv tool install "git+https://github.com/tvtdev94/dbread[postgres]"
 
 ### 2. Create a read-only DB user
 
-See [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) — copy-paste SQL snippets for PostgreSQL / MySQL / MSSQL / Oracle / SQLite.
+See [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) — copy-paste SQL snippets for PostgreSQL / MySQL / MSSQL / Oracle / SQLite / DuckDB / ClickHouse, plus compat notes for CockroachDB · Timescale · Aurora · SingleStore · PlanetScale · Yugabyte.
 
 ### 3. Create `config.yaml` + `.env`
 
@@ -60,8 +61,10 @@ connections:
     statement_timeout_s: 30
     max_rows: 1000
 audit:
-  path: ~/.dbread/audit.jsonl
-  rotate_mb: 50
+  path: ~/.dbread/audit.jsonl   # ~ expansion supported
+  rotate_mb: 50                  # rotates current → .1 → .2 → .3 (oldest dropped)
+  timezone: UTC                  # IANA name; default UTC
+  redact_literals: false         # true → SQL literals become "?" in log (PII hardening)
 ```
 
 ```
@@ -162,10 +165,10 @@ sequenceDiagram
 | Layer | Mechanism | What it rejects |
 |:-:|---|---|
 | **0** | DB user with `GRANT SELECT` only | **All writes — mandatory, non-bypassable** |
-| **1** | `sqlglot` AST validation | `INSERT` · `UPDATE` · `DELETE` · `MERGE` · `CREATE` · `ALTER` · `DROP` · `TRUNCATE` · `GRANT` · `REVOKE` · multi-statement (`SELECT 1; DROP...`) · **PG CTE-DML trick** (`WITH d AS (DELETE...) SELECT...`) · function blacklist (`pg_read_file`, `xp_cmdshell`, `load_file`, `dblink_exec`, …) |
+| **1** | `sqlglot` AST validation | `INSERT` · `UPDATE` · `DELETE` · `MERGE` · `CREATE` · `ALTER` · `DROP` · `TRUNCATE` · `GRANT` · `REVOKE` · multi-statement (`SELECT 1; DROP...`) · **PG CTE-DML trick** (`WITH d AS (DELETE...) SELECT...`) · time-based DoS (`pg_sleep*`, `sleep`, `benchmark`, MSSQL `WAITFOR DELAY/TIME`) · function blacklist (`pg_read_file`, `xp_cmdshell`, `load_file`, `dblink_exec`, ClickHouse `url`/`s3`/`remote`, DuckDB `read_csv`/`read_parquet`, …) |
 | **2** | Rate limit + `statement_timeout` | Runaway loops · long-running queries |
 | **3** | Auto-inject `LIMIT N` | Oversized result sets |
-| **4** | JSONL audit log | *(detection, not prevention — grep-friendly forensics)* |
+| **4** | JSONL audit log (`fsync` each write, 3-backup rotate, opt-in PII redact) | *(detection, not prevention — grep-friendly forensics)* |
 
 > 💡 **Principle:** Never rely on a single layer. Layer 0 is the guarantee; Layers 1–4 make attacks loud and rare.
 
@@ -197,12 +200,14 @@ Full threat model: [`docs/security-threat-model.md`](docs/security-threat-model.
 
 ## 📜 Audit Log
 
-Every call lands in `audit.jsonl` — one JSON per line, append-only, auto-rotated at 50 MB.
+Every call lands in `audit.jsonl` — one JSON per line, append-only, `fsync`'d on each write (survives `kill -9`), auto-rotated at 50 MB through a 3-backup chain (`.1` → `.2` → `.3`).
 
 ```jsonc
-{"ts":"2026-04-22T19:30:12+07:00","conn":"analytics","sql":"SELECT * FROM users LIMIT 100","rows":100,"ms":42,"status":"ok"}
-{"ts":"2026-04-22T19:30:15+07:00","conn":"analytics","sql":"DELETE FROM users","rows":0,"ms":0,"status":"rejected","reason":"node_rejected: Delete"}
+{"ts":"2026-04-22T12:30:12+00:00","conn":"analytics","sql":"SELECT * FROM users LIMIT 100","rows":100,"ms":42,"status":"ok"}
+{"ts":"2026-04-22T12:30:15+00:00","conn":"analytics","sql":"DELETE FROM users","rows":0,"ms":0,"status":"rejected","reason":"node_rejected: Delete"}
 ```
+
+Default timezone is **UTC**; override with `audit.timezone: Asia/Bangkok` (IANA). Enable `audit.redact_literals: true` to rewrite SQL literals to `?` before logging — handy when prompts may contain PII.
 
 ```bash
 jq 'select(.status=="rejected")' audit.jsonl     # just rejections
@@ -232,12 +237,30 @@ connections:
     statement_timeout_s: 15
     max_rows: 500
 
+  local_duckdb:
+    url: duckdb:///./analytics.duckdb?access_mode=read_only
+    dialect: duckdb
+    rate_limit_per_min: 200
+    statement_timeout_s: 30
+    max_rows: 5000
+
+  clickhouse_prod:
+    url_env: CLICKHOUSE_URL            # clickhouse+http://readonly:pw@host:8123/db
+    dialect: clickhouse
+    rate_limit_per_min: 60
+    statement_timeout_s: 30
+    max_rows: 1000
+
 audit:
-  path: ./audit.jsonl
-  rotate_mb: 50
+  path: ~/.dbread/audit.jsonl         # ~ expansion supported
+  rotate_mb: 50                        # rotate chain: current → .1 → .2 → .3
+  timezone: UTC                        # IANA; default UTC
+  redact_literals: false               # true → SQL literals → "?"
 ```
 
-Supported dialects: `postgres` · `mysql` · `mssql` · `sqlite` · `oracle`.
+Supported dialects: `postgres` · `mysql` · `mssql` · `sqlite` · `oracle` · `duckdb` · `clickhouse`.
+
+Compat (no new dialect): CockroachDB, TimescaleDB, Aurora PG (use `postgres`) · Aurora MySQL, SingleStore, PlanetScale (use `mysql`). See [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md#compatible-databases-no-new-dialect-needed).
 
 ---
 
@@ -245,18 +268,20 @@ Supported dialects: `postgres` · `mysql` · `mssql` · `sqlite` · `oracle`.
 
 ```bash
 uv sync --extra dev
-uv run pytest                          # 97 passing
-uv run pytest --cov=dbread             # coverage report
+uv run pytest                          # 122 passing
+uv run pytest --cov=dbread             # coverage report (92% overall, 85% server.py)
 uv run ruff check src/                 # lint
 
-# Integration tests with real PG + MySQL (needs Docker):
+# Integration tests with real PG + MySQL + ClickHouse (needs Docker):
 cd tests/integration && docker compose up -d
 uv run pytest tests/integration/ -v
 ```
 
-- **89 unit tests** cover config, connections, audit, SQL guard (**48 evasion cases**), rate limiter, tools.
-- **4 SQLite E2E tests** always run.
-- **4 PG + 4 MySQL E2E tests** skip gracefully without Docker.
+- **~110 unit tests** cover config, connections, audit (fsync/tz/redact/rotate), SQL guard (**57 evasion cases incl. WAITFOR & sleep variants**), rate limiter, tools.
+- **4 subprocess smoke tests** drive `server.py` via real stdio JSON-RPC.
+- **4 SQLite + 4 DuckDB E2E tests** always run (no Docker).
+- **4 PG + 4 MySQL + ClickHouse E2E tests** skip gracefully without Docker.
+- CI runs on **GitHub Actions matrix**: Python 3.11/3.12 × Ubuntu/Windows.
 
 ---
 

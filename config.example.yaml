@@ -25,5 +25,7 @@ connections:
     max_rows: 2000
 
 audit:
-  path: ./audit.jsonl
-  rotate_mb: 50
+  path: ./audit.jsonl          # supports ~ expansion, e.g. ~/.dbread/audit.jsonl
+  rotate_mb: 50                 # rotates current -> .1 -> .2 -> .3 (oldest dropped)
+  timezone: UTC                 # IANA name, e.g. "Asia/Bangkok"; unknown -> UTC
+  redact_literals: false        # true: SQL literals -> "?" in log (PII hardening)

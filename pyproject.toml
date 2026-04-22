@@ -1,6 +1,6 @@
 [project]
 name = "dbread"
-version = "0.1.1"
+version = "0.2.0"
 description = "Read-only database MCP proxy for AI - safe SELECT access with 5-layer defense"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -43,6 +43,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
+    "tzdata>=2024.1; sys_platform == 'win32'",
 ]
 
 [project.urls]
@@ -56,10 +57,13 @@ postgres = ["psycopg2-binary>=2.9"]
 mysql = ["pymysql>=1.1"]
 mssql = ["pyodbc>=5.0"]
 oracle = ["oracledb>=2.0"]
+duckdb = ["duckdb>=1.0", "duckdb-engine>=0.13"]
+clickhouse = ["clickhouse-sqlalchemy>=0.3"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.3",
     "ruff>=0.4",
 ]
 
@@ -83,3 +87,20 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "integration: requires docker / external services",
+]
+
+[tool.coverage.run]
+parallel = true
+source = ["src/dbread"]
+branch = false
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
