@@ -38,7 +38,7 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
       - name: Install deps
-        run: uv sync --extra dev --python ${{ matrix.python-version }}
+        run: uv sync --extra dev --extra mongo --python ${{ matrix.python-version }}
       - name: Run tests with coverage
         run: uv run pytest --cov=dbread --cov-report=xml --cov-report=term --cov-fail-under=85 -m "not integration"
       - name: Upload coverage
@@ -47,3 +47,62 @@ jobs:
         with:
           name: coverage-xml
           path: coverage.xml
+
+  integration-mongo:
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27019:27017
+        env:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: rootpw
+          MONGO_INITDB_DATABASE: dbread_test
+        options: >-
+          --health-cmd "mongosh --quiet --eval \"db.adminCommand('ping').ok\""
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Install deps
+        run: uv sync --extra dev --extra mongo
+      - name: Install mongosh
+        run: |
+          wget -qO - https://www.mongodb.org/static/pgp/server-7.0.asc | sudo gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg
+          echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+          sudo apt-get update
+          sudo apt-get install -y mongodb-mongosh
+      - name: Seed MongoDB
+        env:
+          ADMIN_URL: mongodb://root:rootpw@localhost:27019/admin?authSource=admin
+        run: |
+          mongosh "$ADMIN_URL" --quiet --eval '
+            const d = db.getSiblingDB("dbread_test");
+            d.createUser({user:"ai_ro", pwd:"ro_pw", roles:[{role:"read", db:"dbread_test"}]});
+            d.users.insertMany([
+              {_id:1, email:"a@x.com", status:"active", age:28},
+              {_id:2, email:"b@x.com", status:"inactive", age:35},
+              {_id:3, email:"c@x.com", status:"active", age:42, tags:["vip","beta"]}
+            ]);
+            d.orders.insertMany([
+              {_id:1, user_id:1, amount:100, status:"paid"},
+              {_id:2, user_id:1, amount:50, status:"refunded"},
+              {_id:3, user_id:3, amount:200, status:"paid"}
+            ]);
+            d.users.createIndex({email:1}, {unique:true});
+            d.orders.createIndex({user_id:1});
+          '
+      - name: Run mongo E2E tests
+        env:
+          MONGO_URL: mongodb://ai_ro:ro_pw@localhost:27019/dbread_test?authSource=dbread_test
+          SKIP_DOCKER: "1"
+        run: uv run pytest tests/integration/test_e2e_mongo.py -v

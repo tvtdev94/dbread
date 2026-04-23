@@ -4,14 +4,14 @@
 
 # `dbread`
 
-### Read-only database MCP proxy for AI — safe `SELECT` access with 5-layer defense
+### Read-only database MCP proxy for AI — safe `SELECT` + MongoDB read access with 5-layer defense
 
 [![PyPI](https://img.shields.io/pypi/v/dbread?color=3775a9&logo=pypi&logoColor=white)](https://pypi.org/project/dbread/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-1.27+-6e56cf?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io/)
 [![CI](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml/badge.svg)](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-130%20passing-22c55e)](#-testing)
-[![Coverage](https://img.shields.io/badge/coverage-92%25-0891b2)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-274%20passing-22c55e)](#-testing)
+[![Coverage](https://img.shields.io/badge/coverage-87%25-0891b2)](#-testing)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-de5fe9)](https://docs.astral.sh/uv/)
 [![License MIT](https://img.shields.io/badge/license-MIT-94a3b8)](LICENSE)
 
@@ -41,7 +41,7 @@ Handing a raw database connection string to an AI is like handing a stranger you
 
 ```bash
 # From PyPI (recommended):
-uv tool install "dbread[postgres]"          # extras: postgres, mysql, mssql, oracle, duckdb, clickhouse
+uv tool install "dbread[postgres]"          # extras: postgres, mysql, mssql, oracle, duckdb, clickhouse, mongo
 
 # OR straight from GitHub (no PyPI needed):
 uv tool install "git+https://github.com/tvtdev94/dbread[postgres]"
@@ -57,7 +57,7 @@ Creates `~/.dbread/config.yaml`, `~/.dbread/.env`, and `~/.dbread/sample.db` (a 
 
 ### 2b. Create a read-only DB user (when pointing at a real DB)
 
-See [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) — copy-paste SQL snippets for PostgreSQL / MySQL / MSSQL / Oracle / SQLite / DuckDB / ClickHouse, plus compat notes for CockroachDB · Timescale · Aurora · SingleStore · PlanetScale · Yugabyte.
+See [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) — copy-paste SQL/Mongo snippets for PostgreSQL / MySQL / MSSQL / Oracle / SQLite / DuckDB / ClickHouse / **MongoDB**, plus compat notes for CockroachDB · Timescale · Aurora · SingleStore · PlanetScale · Yugabyte · DocumentDB · CosmosDB.
 
 ### 3. Create `config.yaml` + `.env`
 
@@ -164,9 +164,9 @@ sequenceDiagram
 |------|---------|-------|
 | `list_connections` | Configured connections + dialects | — |
 | `list_tables` | Tables in a connection | `connection`, `schema?` |
-| `describe_table` | Columns, types, nullability, PKs, indexes | `connection`, `table`, `schema?` |
-| `query` | Run `SELECT`/`WITH`/`EXPLAIN`/`SHOW`. Auto-limited. Rate-limited. Audited. | `connection`, `sql`, `max_rows?` |
-| `explain` | Query execution plan | `connection`, `sql` |
+| `describe_table` | SQL: columns/types/PKs/indexes. Mongo: sampled field schema + indexes | `connection`, `table`, `schema?` |
+| `query` | Run `SELECT`/`WITH`/`EXPLAIN`/`SHOW` (SQL) **or** Mongo `command` (find/count/distinct/aggregate). Auto-limited. Rate-limited. Audited. | `connection`, `sql` \| `command`, `max_rows?` |
+| `explain` | Query execution plan | `connection`, `sql` \| `command` |
 
 ---
 
@@ -175,7 +175,7 @@ sequenceDiagram
 | Layer | Mechanism | What it rejects |
 |:-:|---|---|
 | **0** | DB user with `GRANT SELECT` only | **All writes — mandatory, non-bypassable** |
-| **1** | `sqlglot` AST validation | `INSERT` · `UPDATE` · `DELETE` · `MERGE` · `CREATE` · `ALTER` · `DROP` · `TRUNCATE` · `GRANT` · `REVOKE` · multi-statement (`SELECT 1; DROP...`) · **PG CTE-DML trick** (`WITH d AS (DELETE...) SELECT...`) · time-based DoS (`pg_sleep*`, `sleep`, `benchmark`, MSSQL `WAITFOR DELAY/TIME`) · function blacklist (`pg_read_file`, `xp_cmdshell`, `load_file`, `dblink_exec`, ClickHouse `url`/`s3`/`remote`, DuckDB `read_csv`/`read_parquet`, …) |
+| **1** | `sqlglot` AST validation (SQL) · allowlist validator (Mongo) | **SQL:** `INSERT` · `UPDATE` · `DELETE` · `MERGE` · `CREATE` · `ALTER` · `DROP` · `TRUNCATE` · `GRANT` · `REVOKE` · multi-statement (`SELECT 1; DROP...`) · **PG CTE-DML trick** (`WITH d AS (DELETE...) SELECT...`) · time-based DoS (`pg_sleep*`, `sleep`, `benchmark`, MSSQL `WAITFOR DELAY/TIME`) · function blacklist (`pg_read_file`, `xp_cmdshell`, `load_file`, `dblink_exec`, ClickHouse `url`/`s3`/`remote`, DuckDB `read_csv`/`read_parquet`, …). **Mongo:** only `find`/`count`/`distinct`/`aggregate`; blocks `$out` · `$merge` · `$function` · `$accumulator` · `$where` · `mapReduce` · `$unionWith` · cross-DB `$lookup` · recursively walks `$facet`/`$lookup.pipeline`. |
 | **2** | Rate limit + `statement_timeout` | Runaway loops · long-running queries |
 | **3** | Auto-inject `LIMIT N` | Oversized result sets |
 | **4** | JSONL audit log (`fsync` each write, 3-backup rotate, opt-in PII redact) | *(detection, not prevention — grep-friendly forensics)* |
@@ -207,6 +207,8 @@ Rate-limit `acquire`: ~1 µs. **Run `uv run python scripts/benchmark_overhead.py
 💬 "Describe the schema of the orders table in analytics_prod."
 💬 "Top 10 customers by lifetime value — use dbread."
 💬 "Run EXPLAIN on: SELECT ... ORDER BY created_at"
+💬 "Count orders by status in analytics_mongo (use aggregate)."
+💬 '{"find": "users", "filter": {"status": "active"}}'   (Mongo command form)
 ```
 
 ```
@@ -218,6 +220,9 @@ Rate-limit `acquire`: ~1 µs. **Run `uv run python scripts/benchmark_overhead.py
 
 💬 "SELECT 1; DROP TABLE users;"
    → ❌ sql_guard: multi_statement_not_allowed
+
+💬 '{"aggregate": "users", "pipeline": [{"$out": "leak"}]}'
+   → ❌ mongo_guard: blocked_operator: $out
 ```
 
 ---
@@ -295,7 +300,7 @@ audit:
   redact_literals: false               # true → SQL literals → "?"
 ```
 
-Supported dialects: `postgres` · `mysql` · `mssql` · `sqlite` · `oracle` · `duckdb` · `clickhouse`.
+Supported dialects: `postgres` · `mysql` · `mssql` · `sqlite` · `oracle` · `duckdb` · `clickhouse` · `mongodb`.
 
 Compat (no new dialect): CockroachDB, TimescaleDB, Aurora PG (use `postgres`) · Aurora MySQL, SingleStore, PlanetScale (use `mysql`). See [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md#compatible-databases-no-new-dialect-needed).
 
@@ -305,19 +310,19 @@ Compat (no new dialect): CockroachDB, TimescaleDB, Aurora PG (use `postgres`) ·
 
 ```bash
 uv sync --extra dev
-uv run pytest                          # 122 passing
-uv run pytest --cov=dbread             # coverage report (92% overall, 85% server.py)
+uv run pytest                          # 274 passing
+uv run pytest --cov=dbread             # coverage report (87% overall)
 uv run ruff check src/                 # lint
 
-# Integration tests with real PG + MySQL + ClickHouse (needs Docker):
+# Integration tests with real PG + MySQL + ClickHouse + MongoDB (needs Docker):
 cd tests/integration && docker compose up -d
 uv run pytest tests/integration/ -v
 ```
 
-- **~110 unit tests** cover config, connections, audit (fsync/tz/redact/rotate), SQL guard (**57 evasion cases incl. WAITFOR & sleep variants**), rate limiter, tools.
+- **260+ unit tests** cover config, connections, audit (fsync/tz/redact/rotate), SQL guard (**57 evasion cases incl. WAITFOR & sleep variants**), Mongo guard (**22 adversarial cases — $out/$merge smuggling, JS exec, cross-DB $lookup, deep nesting**), rate limiter, tools.
 - **4 subprocess smoke tests** drive `server.py` via real stdio JSON-RPC.
 - **4 SQLite + 4 DuckDB E2E tests** always run (no Docker).
-- **4 PG + 4 MySQL + ClickHouse E2E tests** skip gracefully without Docker.
+- **PG + MySQL + ClickHouse + MongoDB E2E tests** skip gracefully without Docker.
 - CI runs on **GitHub Actions matrix**: Python 3.11/3.12 × Ubuntu/Windows.
 
 ---
@@ -331,6 +336,9 @@ Honesty pass — what dbread does *not* do:
 - **Audit is reactive, not preventive.** JSONL + `dbread audit` help you notice; they don't block.
 - **No query cost estimator.** Layer 2 has `statement_timeout` and `LIMIT N`, but an expensive index-less scan that finishes in time still runs.
 - **Pre-1.0 project.** Real-world adversarial testing accumulates over time. Treat dbread as one layer of defense, not the whole perimeter.
+- **MongoDB guard is new (v0.4).** Allowlist-based, less battle-tested than sqlglot. Adversarial suite covers the known write-stage / JS-exec evasions; report new ones.
+- **Mongo schema is sampled, not authoritative** (default 100 docs). Rare fields may be missed — bump `mongo.sample_size` (max 1000) if needed.
+- **No Atlas Search / `$search` / `$vectorSearch` support.** Deferred to v0.5+.
 
 ## 📚 Docs
 
@@ -353,10 +361,39 @@ src/dbread/
 ├── rate_limiter.py   # thread-safe token bucket per connection
 ├── connections.py    # SQLAlchemy engine manager (lazy, per-dialect)
 ├── config.py         # pydantic Settings (YAML + env)
-└── audit.py          # append-only JSONL with size rotation
+├── audit.py          # append-only JSONL with size rotation
+└── mongo/
+    ├── client.py     # MongoClient manager (one per connection name)
+    ├── guard.py      # allowlist validator + limit injection for commands
+    ├── schema.py     # sample-based schema inference
+    └── tools.py      # Mongo tool handlers (list/describe/query/explain)
 ```
 
 Every source file is **under 200 LOC** — designed to be readable end-to-end.
+
+---
+
+## 🛠️ Development
+
+Working from source (no PyPI release yet, or iterating on a patch)? Use the
+dev-install scripts — they reinstall the `uv tool` **with** a full wheel
+rebuild even when the version hasn't changed (`uv tool install --force`
+alone does NOT re-copy source when the version is unchanged).
+
+```bash
+# Bash (macOS, Linux, Git-Bash on Windows)
+bash scripts/dev-install.sh            # installs [mongo] extras by default
+bash scripts/dev-install.sh "mongo,postgres,mysql"
+```
+
+```powershell
+# PowerShell
+.\scripts\dev-install.ps1
+.\scripts\dev-install.ps1 -Extras "mongo,postgres,mysql"
+```
+
+Then in Claude Code: `/mcp` → pick `dbread` → **Reconnect** so the new tool
+list is fetched.
 
 ---
 

@@ -68,7 +68,7 @@ def _seed_sample_db(path: Path) -> None:
             );
             INSERT INTO greetings (text) VALUES
                 ('hello from dbread'),
-                ('v0.2 production polish'),
+                ('v0.4 mongodb support'),
                 ('try: SELECT * FROM greetings');
             """
         )

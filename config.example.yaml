@@ -24,6 +24,16 @@ connections:
     statement_timeout_s: 10
     max_rows: 2000
 
+  # Uncomment if using MongoDB (requires: uv tool install "dbread[mongo]"):
+  # analytics_mongo:
+  #   url_env: ANALYTICS_MONGO_URL       # e.g. mongodb://ai_ro:pw@host:27017/db?tls=true
+  #   dialect: mongodb
+  #   rate_limit_per_min: 60
+  #   statement_timeout_s: 30             # becomes maxTimeMS=30000 on every command
+  #   max_rows: 1000
+  #   mongo:
+  #     sample_size: 100                  # docs sampled by describe_table (10-1000)
+
 audit:
   path: ./audit.jsonl          # supports ~ expansion, e.g. ~/.dbread/audit.jsonl
   rotate_mb: 50                 # rotates current -> .1 -> .2 -> .3 (oldest dropped)

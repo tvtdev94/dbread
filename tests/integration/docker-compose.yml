@@ -30,6 +30,22 @@ services:
       timeout: 2s
       retries: 30
 
+  mongo:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpw
+      MONGO_INITDB_DATABASE: dbread_test
+    ports:
+      - "27019:27017"
+    volumes:
+      - ./fixtures/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   clickhouse:
     image: clickhouse/clickhouse-server:24-alpine
     environment:

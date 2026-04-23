@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.4.0"
 
 
 def _tool_schemas() -> list[Tool]:
@@ -64,29 +64,42 @@ def _tool_schemas() -> list[Tool]:
         Tool(
             name="query",
             description=(
-                "Run a read-only SELECT/WITH query. DML/DDL is rejected. "
-                "Results are auto-limited and rate-limited. All calls are audited."
+                "Run a read-only query. Provide exactly one of `sql` (SQL "
+                "dialects: SELECT/WITH) or `command` (mongodb dialect: JSON "
+                "command spec — find/count/distinct/aggregate). Results "
+                "auto-limited, rate-limited, audited. Server rejects the call "
+                "with invalid_input if neither or both are set for the target "
+                "dialect."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "connection": {"type": "string"},
+                    "sql": {"type": "string", "description": "SQL SELECT — for SQL dialects"},
+                    "command": {
+                        "type": "object",
+                        "description": "MongoDB command spec — for mongodb dialect",
+                    },
+                    "max_rows": {"type": "integer", "minimum": 1},
+                },
+                "required": ["connection"],
+            },
+        ),
+        Tool(
+            name="explain",
+            description=(
+                "Return the query execution plan. SQL connections: pass `sql`. "
+                "MongoDB connections: pass `command`. Server rejects with "
+                "invalid_input if the wrong field is provided for the dialect."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "connection": {"type": "string"},
                     "sql": {"type": "string"},
-                    "max_rows": {"type": "integer", "minimum": 1},
+                    "command": {"type": "object"},
                 },
-                "required": ["connection", "sql"],
-            },
-        ),
-        Tool(
-            name="explain",
-            description="Return the query execution plan for a read-only SELECT.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "connection": {"type": "string"},
-                    "sql": {"type": "string"},
-                },
-                "required": ["connection", "sql"],
+                "required": ["connection"],
             },
         ),
     ]
@@ -102,17 +115,36 @@ async def _run() -> None:
     settings = Settings.load(config_path)
 
     cm = ConnectionManager(settings)
+    rate_limiter = RateLimiter(settings)
+    audit = AuditLogger(
+        settings.audit.path,
+        settings.audit.rotate_mb,
+        timezone=settings.audit.timezone,
+        redact_literals=settings.audit.redact_literals,
+    )
+
+    has_mongo = any(c.dialect == "mongodb" for c in settings.connections.values())
+    mongo_mgr = None
+    mongo_handlers = None
+    if has_mongo:
+        from .mongo.client import MongoClientManager
+        from .mongo.tools import MongoToolHandlers
+
+        mongo_mgr = MongoClientManager(settings)
+        mongo_handlers = MongoToolHandlers(
+            conn_mgr=cm,
+            mongo_mgr=mongo_mgr,
+            rate_limiter=rate_limiter,
+            audit=audit,
+        )
+
     handlers = ToolHandlers(
         settings=settings,
         conn_mgr=cm,
         guard=SqlGuard(),
-        rate_limiter=RateLimiter(settings),
-        audit=AuditLogger(
-            settings.audit.path,
-            settings.audit.rotate_mb,
-            timezone=settings.audit.timezone,
-            redact_literals=settings.audit.redact_literals,
-        ),
+        rate_limiter=rate_limiter,
+        audit=audit,
+        mongo=mongo_handlers,
     )
 
     server: Server = Server(SERVER_NAME)
@@ -158,6 +190,8 @@ async def _run() -> None:
             )
     finally:
         cm.close_all()
+        if mongo_mgr is not None:
+            mongo_mgr.close_all()
 
 
 def main() -> None:

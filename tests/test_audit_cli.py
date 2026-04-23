@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -32,7 +32,7 @@ def _rec(
     reason: str | None = None,
 ) -> dict[str, object]:
     if ts is None:
-        ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        ts = datetime.now(UTC).isoformat(timespec="seconds")
     out: dict[str, object] = {
         "ts": ts, "conn": conn, "sql": sql, "rows": 1, "ms": ms, "status": status,
     }
@@ -77,8 +77,8 @@ def test_summary_counts(tmp_path: Path) -> None:
 
 def test_since_filter(tmp_path: Path) -> None:
     p = tmp_path / "a.jsonl"
-    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(timespec="seconds")
-    new = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    old = (datetime.now(UTC) - timedelta(days=2)).isoformat(timespec="seconds")
+    new = datetime.now(UTC).isoformat(timespec="seconds")
     _write(p, [_rec(ts=old, sql="OLD"), _rec(ts=new, sql="NEW")])
     entries = list(_iter_entries(str(p), since=timedelta(hours=1)))
     sqls = [e["sql"] for e in entries]

@@ -308,6 +308,59 @@ Follow the PostgreSQL / MySQL sections above for Layer-0 setup.
 
 ---
 
+## MongoDB
+
+### Create a read-only user
+
+Connect as admin (replica set, Atlas, or self-hosted), switch to the target DB:
+
+```js
+use analytics
+db.createUser({
+  user: "ai_readonly",
+  pwd: passwordPrompt(),
+  roles: [{ role: "read", db: "analytics" }]
+})
+```
+
+For multi-DB read access, stack `read` roles:
+
+```js
+roles: [
+  { role: "read", db: "analytics" },
+  { role: "read", db: "marketing" }
+]
+```
+
+### Connection URI
+
+Self-hosted / replica set:
+
+```
+mongodb://ai_readonly:password@host:27017/analytics?authSource=analytics&tls=true
+```
+
+Atlas:
+
+```
+mongodb+srv://ai_readonly:password@cluster0.abc.mongodb.net/analytics?retryWrites=false
+```
+
+> **Layer 0 guarantee.** The `read` role grants only `find`/`count`/`aggregate` —
+> `insert`/`update`/`delete`/`mapReduce` return `not authorized` at the server.
+> That's the non-bypassable floor; `mongo_guard` is an additional layer, not a
+> replacement.
+
+### Compat notes
+
+| Platform                        | Dialect    | Notes                                                                   |
+|---------------------------------|------------|-------------------------------------------------------------------------|
+| MongoDB 6/7/8 (self-host, Atlas)| `mongodb`  | Full support                                                            |
+| AWS DocumentDB                  | `mongodb`  | Partial — some aggregation stages missing server-side. Read path works. |
+| Azure CosmosDB (Mongo API)      | `mongodb`  | Partial — limited aggregation parity. YMMV on complex pipelines.        |
+
+---
+
 ## Verification Checklist (all DBs)
 
 - [ ] `SELECT 1` works

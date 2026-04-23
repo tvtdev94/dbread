@@ -57,8 +57,17 @@ sqlglot parses differently per dialect. Layer 1 coverage mirrors that. Layer 0 (
 | oracle | Medium | PL/SQL `BEGIN..END` blocks parse as Command (rejected), `EXEC`, `CALL` | Package-name prefix on blacklisted funcs depends on parse |
 | clickhouse | Medium | `file`, `url`, `s3`, `hdfs`, `remote`, `remoteSecure`, `cluster`, camelCase normalised | New table functions land frequently; re-audit each ClickHouse release |
 | duckdb | Medium | `read_csv`, `read_parquet`, `read_json`, `COPY TO`, `INSTALL`, `LOAD`, `ATTACH http://...` | Extensions can add new readers after `INSTALL ext; LOAD ext;` (both blocked) |
+| mongodb | Medium — new code | Allowlist: only `find`/`count`/`distinct`/`aggregate`. Blocks `$out`, `$merge`, `$function`, `$accumulator`, `$where`, `mapReduce`, `$unionWith`, cross-DB `$lookup`. Recursively walks `$facet`, `$lookup.pipeline`. Max pipeline depth 10. | Allowlist is hand-curated; new Mongo versions add stages (default-deny flags them until reviewed). Adversarial suite ≥20 cases in v0.4. |
 
 **Rule of thumb:** Strong = primary dialects the project integration-tests against. Medium = parsed dialect but weaker empirical coverage; treat Layer 0 as the only guarantee.
+
+### MongoDB-specific STRIDE notes
+
+- **T** (Tampering via `$out`/`$merge`): blocked at Layer 1 by `MongoGuard` — allowlist rejects stage name; recursive walk catches nesting inside `$facet` / `$lookup.pipeline`. Layer 0 (user with `read` role only) is the non-bypassable backstop.
+- **E** (JS code execution via `$function` / `$accumulator` / `$where` / `mapReduce`): Layer 1 walks the entire command dict for these operator keys at any depth. `mapReduce` is rejected at the command-name allowlist level. Layer 0's `read` role also lacks EXECUTE on server-side JS.
+- **I** (Info disclosure via cross-collection `$lookup`): same-DB `$lookup` is legitimate read traffic and allowed; cross-DB `$lookup` (dotted `from: "db.coll"`) is rejected. `$unionWith` is blocked outright in v0.4 (safer default; can relax later).
+- **D** (DoS via deep pipelines): `MAX_PIPELINE_DEPTH=10` on nested `$facet`/`$lookup.pipeline` walks. Layer 2: `maxTimeMS = statement_timeout_s * 1000` injected into every command.
+- **R** (Repudiation): same JSONL audit; `redact_literals=true` recursively rewrites scalar values in `filter`/`pipeline` to `"?"`, preserving stage names, operator keys and schema fields (`$lookup.from`, etc.) for debuggability.
 
 ## If You Skip Layer 0
 
