@@ -136,37 +136,60 @@ Ask Claude: *"List connections in dbread, then count rows per status in the orde
 
 **Data flow for a `query` call:**
 
+<div align="center">
+<img src="https://raw.githubusercontent.com/tvtdev94/dbread/master/docs/images/query-flow.png" alt="dbread query data flow" width="100%" />
+</div>
+
+<details>
+<summary><b>Mermaid source</b> (for contributors — re-render with <code>mmdc</code>)</summary>
+
 ```mermaid
 sequenceDiagram
-    participant AI as Claude
+    autonumber
+    participant AI as 🤖 AI Agent
     participant T as tools.query
-    participant G as SqlGuard
+    participant G as Guard<br/>(SQL · Mongo)
     participant R as RateLimiter
     participant D as Database
-    participant A as Audit
+    participant A as 📜 Audit
 
-    AI->>T: query(sql, connection)
-    T->>G: validate(sql, dialect)
-    alt SQL is DML/DDL
-        G-->>T: rejected
-        T->>A: log(rejected, reason)
-        T-->>AI: ❌ sql_guard error
-    else SQL is SELECT
-        G->>T: ✓ plus inject LIMIT N
-        T->>R: acquire(connection)
-        alt Rate limit hit
-            R-->>T: denied
-            T->>A: log(rejected, rate_limit)
+    AI->>+T: query(connection, sql | command)
+    Note over T: route by dialect
+
+    T->>+G: validate()
+    alt 🚫 write · JS-exec · blacklisted fn
+        G-->>T: rejected(reason)
+        T->>A: log(rejected)
+        T-->>AI: ❌ guard_error
+    else ✅ read-only
+        G-->>-T: allowed + auto-inject LIMIT N
+
+        T->>+R: acquire(connection)
+        alt 🚫 per-conn OR global QPM hit
+            R-->>T: denied(scope)
+            T->>A: log(rate_limit)
             T-->>AI: ❌ rate_limit_exceeded
-        else Rate limit OK
-            R->>T: ✓
-            T->>D: execute(sql)
-            D-->>T: rows
+        else ✅ token granted
+            R-->>-T: ok
+            T->>+D: execute (statement_timeout)
+            D-->>-T: rows
             T->>A: log(ok, rows, ms)
             T-->>AI: ✅ rows JSON
         end
     end
+    deactivate T
 ```
+
+Source: `docs/images/query-flow.mmd`. Regenerate with:
+```bash
+npx -p @mermaid-js/mermaid-cli mmdc \
+  -i docs/images/query-flow.mmd \
+  -o docs/images/query-flow.png \
+  -c docs/images/mermaid-config.json \
+  -b "#0f172a" -w 1600 -H 1200 --scale 2
+```
+
+</details>
 
 ---
 
