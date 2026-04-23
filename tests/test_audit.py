@@ -346,6 +346,10 @@ def test_retention_prunes_rotated_backups(tmp_path: Path) -> None:
 
 def test_retention_opportunistic_throttles_per_hour(tmp_path: Path) -> None:
     """log() must not re-scan files on every call — only every _PRUNE_INTERVAL_S."""
+    import time
+
+    from dbread.audit import _PRUNE_INTERVAL_S
+
     path = tmp_path / "a.jsonl"
     logger = AuditLogger(str(path), rotate_mb=50, retention_days=7)
 
@@ -355,8 +359,10 @@ def test_retention_opportunistic_throttles_per_hour(tmp_path: Path) -> None:
         # First log() call sets last_prune_ts; none should trigger again within the hour.
         assert mock_prune.call_count == 0
 
-    # Force a stale last_prune_ts -> next log() triggers a prune pass.
-    logger._last_prune_ts = 0.0
+    # Force the last prune to appear stale (> interval ago) in a way that's
+    # platform-independent: monotonic() origin differs (tiny on Linux CI
+    # containers, huge on Windows since-boot), so use a relative offset.
+    logger._last_prune_ts = time.monotonic() - _PRUNE_INTERVAL_S - 1
     with patch.object(logger, "_prune_old_entries") as mock_prune:
         logger.log("c", "SELECT 2", status="ok")
         assert mock_prune.call_count == 1

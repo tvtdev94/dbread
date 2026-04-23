@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -98,3 +99,121 @@ def test_generated_url_uses_absolute_path(fake_home: Path) -> None:
     # must NOT contain ~ (SQLite URI does not expand tilde)
     assert "~" not in url
     assert str(fake_home).replace("\\", "/") in url or str(fake_home) in url
+
+
+# ---- install-skill: Claude Code integration -------------------------------
+
+
+def test_install_skill_skips_when_claude_dir_missing(fake_home: Path, capsys) -> None:
+    """No ~/.claude -> silent no-op (user doesn't have Claude Code)."""
+    from dbread.cli import install_skill
+
+    rc = install_skill()
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "~/.claude not found" in out
+    assert not (fake_home / ".claude").exists()
+
+
+def test_install_skill_creates_file_when_claude_dir_exists(
+    fake_home: Path, capsys
+) -> None:
+    from dbread.cli import install_skill
+
+    (fake_home / ".claude").mkdir()
+
+    rc = install_skill()
+    assert rc == 0
+    target = fake_home / ".claude" / "skills" / "dbread" / "SKILL.md"
+    assert target.is_file()
+    content = target.read_text(encoding="utf-8")
+    assert content.startswith("---")
+    assert "name: dbread" in content
+    assert "description:" in content
+
+
+def test_install_skill_idempotent_without_force(fake_home: Path, capsys) -> None:
+    """Second run without --force skips to avoid clobbering user edits."""
+    from dbread.cli import install_skill
+
+    (fake_home / ".claude").mkdir()
+
+    install_skill()
+    target = fake_home / ".claude" / "skills" / "dbread" / "SKILL.md"
+    target.write_text("USER-EDITED", encoding="utf-8")
+
+    install_skill()  # no force
+    assert target.read_text(encoding="utf-8") == "USER-EDITED"
+    out = capsys.readouterr().out
+    assert "already exists" in out
+
+
+def test_install_skill_force_overwrites(fake_home: Path) -> None:
+    from dbread.cli import install_skill
+
+    (fake_home / ".claude").mkdir()
+    install_skill()
+    target = fake_home / ".claude" / "skills" / "dbread" / "SKILL.md"
+    target.write_text("STALE", encoding="utf-8")
+
+    install_skill(force=True)
+    content = target.read_text(encoding="utf-8")
+    assert content != "STALE"
+    assert "name: dbread" in content
+
+
+def test_install_skill_quiet_suppresses_skip_message(
+    fake_home: Path, capsys
+) -> None:
+    from dbread.cli import install_skill
+
+    install_skill(quiet=True)
+    out = capsys.readouterr().out
+    assert out == ""
+
+
+def test_init_triggers_skill_install_when_claude_present(
+    fake_home: Path, capsys
+) -> None:
+    (fake_home / ".claude").mkdir()
+
+    init_config()
+    out = capsys.readouterr().out
+    skill_path = fake_home / ".claude" / "skills" / "dbread" / "SKILL.md"
+    assert skill_path.is_file()
+    assert str(skill_path) in out
+
+
+def test_init_skips_skill_install_when_claude_missing(
+    fake_home: Path, capsys
+) -> None:
+    """init still works fine on machines without Claude Code."""
+    init_config()
+    assert not (fake_home / ".claude").exists()
+    assert (fake_home / ".dbread" / "config.yaml").is_file()
+
+
+def test_install_skill_subcommand_via_cli(fake_home: Path) -> None:
+    (fake_home / ".claude").mkdir()
+    proc = subprocess.run(
+        [sys.executable, "-m", "dbread.server", "install-skill"],
+        capture_output=True, text=True, timeout=15,
+        env={**os.environ, "HOME": str(fake_home), "USERPROFILE": str(fake_home)},
+    )
+    assert proc.returncode == 0
+    assert (fake_home / ".claude" / "skills" / "dbread" / "SKILL.md").is_file()
+
+
+def test_install_skill_force_subcommand_via_cli(fake_home: Path) -> None:
+    (fake_home / ".claude").mkdir()
+    target = fake_home / ".claude" / "skills" / "dbread" / "SKILL.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("STALE-SUBPROC", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "dbread.server", "install-skill", "--force"],
+        capture_output=True, text=True, timeout=15,
+        env={**os.environ, "HOME": str(fake_home), "USERPROFILE": str(fake_home)},
+    )
+    assert proc.returncode == 0
+    assert target.read_text(encoding="utf-8") != "STALE-SUBPROC"
+    assert "name: dbread" in target.read_text(encoding="utf-8")
