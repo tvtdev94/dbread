@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/tvtdev94/dbread/master/docs/images/hero-banner.svg" alt="dbread - Read-only DB MCP Proxy for AI" width="100%" />
+<img src="https://raw.githubusercontent.com/tvtdev94/dbread/master/docs/images/hero-banner.png" alt="dbread - Read-only DB MCP Proxy for AI" width="100%" />
 
 # `dbread`
 
@@ -28,7 +28,7 @@ Handing a raw database connection string to an AI is like handing a stranger you
 **dbread sits between your AI and your DBs** and enforces read-only access through **five independent layers** — if one layer has a bug, the next one still blocks you.
 
 <div align="center">
-<img src="https://raw.githubusercontent.com/tvtdev94/dbread/master/docs/images/layers-diagram.svg" alt="5-layer defense in depth" width="100%" />
+<img src="https://raw.githubusercontent.com/tvtdev94/dbread/master/docs/images/layers-diagram.png" alt="5-layer defense in depth" width="100%" />
 </div>
 
 ---
@@ -131,7 +131,7 @@ Ask Claude: *"List connections in dbread, then count rows per status in the orde
 ## 🏗️ Architecture
 
 <div align="center">
-<img src="https://raw.githubusercontent.com/tvtdev94/dbread/master/docs/images/architecture-diagram.svg" alt="dbread architecture" width="100%" />
+<img src="https://raw.githubusercontent.com/tvtdev94/dbread/master/docs/images/architecture-diagram.png" alt="dbread architecture" width="100%" />
 </div>
 
 **Data flow for a `query` call:**
