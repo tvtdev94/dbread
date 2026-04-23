@@ -45,6 +45,7 @@ audit:
   rotate_mb: 50
   timezone: UTC              # IANA name; default UTC
   redact_literals: false     # true -> SQL literals masked to "?" in log
+  retention_days: null       # e.g. 7 -> auto-prune entries older than 7 days
 
 # Optional: cap total QPM across ALL connections (AND-ed with per-conn limit).
 # Defends against rotation attacks. Leave commented for backward compat.
