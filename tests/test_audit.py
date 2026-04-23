@@ -146,6 +146,76 @@ def test_redact_without_dialect_skips(tmp_path: Path) -> None:
     assert rec["sql"] == sql_in
 
 
+# ---- Mongo command redaction ---------------------------------------------
+
+
+def test_redact_mongo_simple_filter() -> None:
+    from dbread.audit import redact_mongo_command
+    cmd = {"find": "users", "filter": {"email": "alice@x.com"}}
+    out = redact_mongo_command(cmd)
+    assert out == {"find": "users", "filter": {"email": "?"}}
+
+
+def test_redact_mongo_operator_preserved() -> None:
+    from dbread.audit import redact_mongo_command
+    cmd = {"find": "u", "filter": {"age": {"$gt": 18}}}
+    out = redact_mongo_command(cmd)
+    assert out == {"find": "u", "filter": {"age": {"$gt": "?"}}}
+
+
+def test_redact_mongo_meta_kept() -> None:
+    from dbread.audit import redact_mongo_command
+    cmd = {"find": "u", "filter": {"x": 1}, "maxTimeMS": 30000, "limit": 100, "skip": 10}
+    out = redact_mongo_command(cmd)
+    assert out["maxTimeMS"] == 30000
+    assert out["limit"] == 100
+    assert out["skip"] == 10
+
+
+def test_redact_mongo_pipeline_match() -> None:
+    from dbread.audit import redact_mongo_command
+    cmd = {
+        "aggregate": "u",
+        "pipeline": [{"$match": {"email": "a@x"}}, {"$limit": 50}],
+    }
+    out = redact_mongo_command(cmd)
+    assert out["pipeline"][0] == {"$match": {"email": "?"}}
+    assert out["pipeline"][1] == {"$limit": 50}  # structural, kept
+
+
+def test_redact_mongo_lookup_preserves_schema_keys() -> None:
+    from dbread.audit import redact_mongo_command
+    cmd = {
+        "aggregate": "orders",
+        "pipeline": [{"$lookup": {
+            "from": "users",
+            "localField": "user_id",
+            "foreignField": "_id",
+            "as": "u",
+            "pipeline": [{"$match": {"email": "a@x"}}],
+        }}],
+    }
+    out = redact_mongo_command(cmd)
+    lookup = out["pipeline"][0]["$lookup"]
+    assert lookup["from"] == "users"
+    assert lookup["localField"] == "user_id"
+    assert lookup["foreignField"] == "_id"
+    assert lookup["as"] == "u"
+    assert lookup["pipeline"][0] == {"$match": {"email": "?"}}
+
+
+def test_redact_mongo_in_operator_list_values() -> None:
+    from dbread.audit import redact_mongo_command
+    cmd = {"find": "u", "filter": {"status": {"$in": ["active", "pending"]}}}
+    out = redact_mongo_command(cmd)
+    assert out["filter"]["status"]["$in"] == ["?", "?"]
+
+
+def test_redact_mongo_noop_on_non_dict() -> None:
+    from dbread.audit import redact_mongo_command
+    assert redact_mongo_command({}) == {}
+
+
 def test_rotation_three_chain(tmp_path: Path) -> None:
     path = tmp_path / "a.jsonl"
     logger = AuditLogger(str(path), rotate_mb=1)

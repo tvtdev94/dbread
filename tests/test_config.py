@@ -58,3 +58,30 @@ def test_empty_connections_rejected(tmp_path: Path) -> None:
 def test_unknown_dialect_rejected() -> None:
     with pytest.raises(ValidationError):
         ConnectionConfig(url="x", dialect="cassandra")  # type: ignore[arg-type]
+
+
+def test_mongodb_dialect_valid() -> None:
+    c = ConnectionConfig(url="mongodb://u:p@h:27017/db", dialect="mongodb")
+    assert c.dialect == "mongodb"
+    assert c.mongo is None
+
+
+def test_mongodb_with_mongo_block() -> None:
+    from dbread.config import MongoConfig
+    c = ConnectionConfig(
+        url="mongodb://u:p@h:27017/db",
+        dialect="mongodb",
+        mongo=MongoConfig(sample_size=200),
+    )
+    assert c.mongo is not None
+    assert c.mongo.sample_size == 200
+
+
+def test_mongo_config_sample_size_range() -> None:
+    from dbread.config import MongoConfig
+    with pytest.raises(ValidationError):
+        MongoConfig(sample_size=9)
+    with pytest.raises(ValidationError):
+        MongoConfig(sample_size=1001)
+    assert MongoConfig(sample_size=10).sample_size == 10
+    assert MongoConfig(sample_size=1000).sample_size == 1000

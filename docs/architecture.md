@@ -50,6 +50,7 @@ dbread is a single-process Python MCP server that proxies **read-only** SQL quer
 | `oracle` | Oracle 19c+ | `dbread[oracle]` | per-table `GRANT SELECT` + resource profile |
 | `duckdb` | DuckDB 1.x | `dbread[duckdb]` | `access_mode=read_only` URL + file perms |
 | `clickhouse` | ClickHouse 24+ | `dbread[clickhouse]` | `readonly` profile + connect-arg `readonly=1` |
+| `mongodb` | MongoDB 6/7/8 (self-hosted, Atlas) | `dbread[mongo]` | user with `read` role on target DB |
 
 ## 5-Layer Defense in Depth
 
@@ -83,14 +84,42 @@ dbread is a single-process Python MCP server that proxies **read-only** SQL quer
 ```
 src/dbread/
 ├── __init__.py          # version
-├── audit.py             # JSONL append + rotation
+├── audit.py             # JSONL append + rotation (+ Mongo redact helper)
 ├── config.py            # pydantic Settings (YAML + env)
 ├── connections.py       # SQLAlchemy engine manager
 ├── rate_limiter.py      # token bucket per connection
 ├── server.py            # MCP server entry (stdio)
 ├── sql_guard.py         # sqlglot AST validation + LIMIT injection
-└── tools.py             # 5 tool handlers wiring everything
+├── tools.py             # 5 tool handlers wiring everything (polymorphic)
+└── mongo/
+    ├── client.py        # MongoClient manager
+    ├── guard.py         # allowlist validator + limit injection
+    ├── schema.py        # sample-based schema inference
+    └── tools.py         # Mongo tool handlers
 ```
+
+## MongoDB Subsystem
+
+Dispatch is by `cfg.dialect`. SQL and Mongo do NOT share engines or guards;
+they DO share `audit` + `rate_limiter` for uniform observability and limits.
+
+```
+tools.query(connection, sql?, command?)
+  │
+  ├─ dialect in SQL → sql_guard → inject LIMIT → rate_limit → SQLAlchemy
+  │
+  └─ dialect == mongodb → mongo.MongoToolHandlers
+                            │
+                            ├─ inject maxTimeMS
+                            ├─ MongoGuard.validate_command  (allowlist, recursive)
+                            ├─ MongoGuard.inject_limit      (find/aggregate)
+                            ├─ rate_limit                   (shared bucket)
+                            └─ pymongo execute
+```
+
+Every file in `mongo/` is under 200 LOC. The guard is allowlist-based
+(default-deny) — unknown stages are rejected so future MongoDB versions do
+not silently pass new write operators.
 
 ## Design Decisions
 
@@ -108,5 +137,7 @@ src/dbread/
 
 - Multi-tenancy.
 - Persistent rate limit (a restart resets all buckets).
-- NoSQL support (Mongo / Redis) — future extension if needed.
+- Atlas Search (`$search`, `$vectorSearch`) — deferred to v0.5+.
+- `motor` async Mongo driver — deferred.
+- `mapReduce`, change streams, `findAndModify` — permanently blocked (write-capable).
 - Network RPC — stdio only.

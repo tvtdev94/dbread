@@ -34,6 +34,10 @@ COMPOSE = HERE / "docker-compose.yml"
 PG_URL = "postgresql+psycopg2://ai_readonly:ropw@localhost:54329/testdb"
 MYSQL_URL = "mysql+pymysql://ai_readonly:ropw@localhost:33069/testdb"
 CLICKHOUSE_URL = "clickhouse+http://ai_readonly:ropw@localhost:81239/testdb"
+MONGO_URL = os.environ.get(
+    "MONGO_URL",
+    "mongodb://ai_ro:ro_pw@localhost:27019/dbread_test?authSource=dbread_test",
+)
 
 
 def _docker_available() -> bool:
@@ -94,6 +98,75 @@ def clickhouse_url() -> Iterator[str]:
     _compose("up", "-d", "clickhouse")
     _wait_ready(CLICKHOUSE_URL, timeout=60)
     yield CLICKHOUSE_URL
+
+
+def _mongo_reachable(url: str, timeout: int = 30) -> bool:
+    try:
+        from pymongo import MongoClient
+    except ImportError:
+        return False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            client = MongoClient(url, serverSelectionTimeoutMS=1000)
+            client.admin.command("ping")
+            client.close()
+            return True
+        except Exception:
+            time.sleep(1)
+    return False
+
+
+@pytest.fixture(scope="session")
+def mongo_url() -> Iterator[str]:
+    """Reach an existing Mongo (via MONGO_URL) or spin one up via docker compose.
+
+    Skips gracefully if docker is unavailable and the env var does not point
+    at a reachable Mongo (Windows CI etc).
+    """
+    env_url = os.environ.get("MONGO_URL")
+    if env_url and _mongo_reachable(env_url, timeout=5):
+        yield env_url
+        return
+    if os.environ.get("SKIP_DOCKER") or not _docker_available():
+        pytest.skip("docker unavailable or SKIP_DOCKER set")
+    _compose("up", "-d", "mongo")
+    if not _mongo_reachable(MONGO_URL, timeout=60):
+        pytest.skip("mongo container did not become reachable")
+    yield MONGO_URL
+
+
+def build_mongo_handlers(url: str, tmp_path: pathlib.Path):
+    """Bootstrap ToolHandlers wired for a mongodb dialect connection."""
+    from dbread.mongo.client import MongoClientManager
+    from dbread.mongo.tools import MongoToolHandlers
+
+    settings = Settings(
+        connections={
+            "m": ConnectionConfig(
+                url=url,
+                dialect="mongodb",
+                rate_limit_per_min=600,
+                statement_timeout_s=10,
+                max_rows=100,
+            ),
+        },
+        audit=AuditConfig(path=str(tmp_path / "audit.jsonl"), rotate_mb=1),
+    )
+    cm = ConnectionManager(settings)
+    rl = RateLimiter(settings)
+    audit = AuditLogger(settings.audit.path, 1)
+    mongo_mgr = MongoClientManager(settings)
+    mongo_handlers = MongoToolHandlers(cm, mongo_mgr, rl, audit)
+    handlers = ToolHandlers(
+        settings=settings,
+        conn_mgr=cm,
+        guard=SqlGuard(),
+        rate_limiter=rl,
+        audit=audit,
+        mongo=mongo_handlers,
+    )
+    return handlers, mongo_mgr
 
 
 def build_handlers(

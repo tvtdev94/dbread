@@ -10,8 +10,19 @@ import yaml
 from pydantic import BaseModel, field_validator, model_validator
 
 Dialect = Literal[
-    "postgres", "mysql", "mssql", "sqlite", "oracle", "duckdb", "clickhouse",
+    "postgres", "mysql", "mssql", "sqlite", "oracle", "duckdb", "clickhouse", "mongodb",
 ]
+
+
+class MongoConfig(BaseModel):
+    sample_size: int = 100
+
+    @field_validator("sample_size")
+    @classmethod
+    def _check_sample_size(cls, v: int) -> int:
+        if not 10 <= v <= 1000:
+            raise ValueError("sample_size must be between 10 and 1000")
+        return v
 
 
 class ConnectionConfig(BaseModel):
@@ -21,6 +32,7 @@ class ConnectionConfig(BaseModel):
     rate_limit_per_min: int = 60
     statement_timeout_s: int = 30
     max_rows: int = 1000
+    mongo: MongoConfig | None = None
 
     @model_validator(mode="after")
     def _check_url(self) -> ConnectionConfig:
