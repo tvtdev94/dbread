@@ -1,0 +1,34 @@
+sequenceDiagram
+    autonumber
+    participant AI as 🤖 AI Agent
+    participant T as tools.query
+    participant G as Guard<br/>(SQL · Mongo)
+    participant R as RateLimiter
+    participant D as Database
+    participant A as 📜 Audit
+
+    AI->>+T: query(connection, sql | command)
+    Note over T: route by dialect
+
+    T->>+G: validate()
+    alt 🚫 write · JS-exec · blacklisted fn
+        G-->>T: rejected(reason)
+        T->>A: log(rejected)
+        T-->>AI: ❌ guard_error
+    else ✅ read-only
+        G-->>-T: allowed + auto-inject LIMIT N
+
+        T->>+R: acquire(connection)
+        alt 🚫 per-conn OR global QPM hit
+            R-->>T: denied(scope)
+            T->>A: log(rate_limit)
+            T-->>AI: ❌ rate_limit_exceeded
+        else ✅ token granted
+            R-->>-T: ok
+            T->>+D: execute (statement_timeout)
+            D-->>-T: rows
+            T->>A: log(ok, rows, ms)
+            T-->>AI: ✅ rows JSON
+        end
+    end
+    deactivate T

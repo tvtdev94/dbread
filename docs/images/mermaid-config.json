@@ -1,0 +1,39 @@
+{
+  "theme": "dark",
+  "themeVariables": {
+    "background": "#0f172a",
+    "primaryColor": "#1e293b",
+    "primaryTextColor": "#e2e8f0",
+    "primaryBorderColor": "#6e56cf",
+    "lineColor": "#94a3b8",
+    "secondaryColor": "#312e81",
+    "tertiaryColor": "#1e293b",
+    "actorBkg": "#1e293b",
+    "actorBorder": "#6e56cf",
+    "actorTextColor": "#e2e8f0",
+    "activationBkgColor": "#6e56cf",
+    "activationBorderColor": "#a855f7",
+    "sequenceNumberColor": "#0f172a",
+    "noteBkgColor": "#0891b2",
+    "noteTextColor": "#f0f9ff",
+    "noteBorderColor": "#06b6d4",
+    "labelBoxBkgColor": "#1e293b",
+    "labelBoxBorderColor": "#6e56cf",
+    "labelTextColor": "#e2e8f0",
+    "signalColor": "#94a3b8",
+    "signalTextColor": "#e2e8f0",
+    "loopTextColor": "#e2e8f0",
+    "altBkgColor": "#1e293b"
+  },
+  "sequence": {
+    "diagramMarginX": 40,
+    "diagramMarginY": 20,
+    "boxMargin": 10,
+    "messageMargin": 40,
+    "mirrorActors": false,
+    "bottomMarginAdj": 1,
+    "useMaxWidth": true,
+    "rightAngles": false,
+    "showSequenceNumbers": false
+  }
+}
