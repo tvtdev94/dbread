@@ -9,11 +9,13 @@ Hardening in v0.2:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import threading
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -98,6 +100,12 @@ def _resolve_tz(name: str) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
+# Minimum gap between opportunistic prune passes during `log()` calls.
+# Keeps the per-call overhead effectively zero while still catching drift
+# on long-running MCP servers that never hit the size rotation threshold.
+_PRUNE_INTERVAL_S = 3600.0
+
+
 class AuditLogger:
     def __init__(
         self,
@@ -105,12 +113,20 @@ class AuditLogger:
         rotate_mb: int = 50,
         timezone: str = "UTC",
         redact_literals: bool = False,
+        retention_days: int | None = None,
     ) -> None:
         self.path = path
         self.rotate_bytes = max(1, rotate_mb) * 1024 * 1024
         self.redact_literals = redact_literals
+        self.retention_days = retention_days
         self._tz = _resolve_tz(timezone)
         self._lock = threading.Lock()
+        self._last_prune_ts = 0.0
+        # One-shot prune at startup — handles stale backups accumulated while
+        # the server was stopped. Cheap when files are small or absent.
+        if retention_days:
+            with self._lock:
+                self._prune_old_entries()
 
     def log(
         self,
@@ -136,6 +152,7 @@ class AuditLogger:
         line = json.dumps(record, ensure_ascii=False) + "\n"
         with self._lock:
             self._maybe_rotate()
+            self._maybe_prune()
             with open(self.path, "a", encoding="utf-8") as f:
                 f.write(line)
                 f.flush()
@@ -178,3 +195,54 @@ class AuditLogger:
                 except OSError as e:
                     log.warning("rotate: %s -> %s failed: %s", src, dst, e)
                     return
+
+    def _maybe_prune(self) -> None:
+        """Run a prune pass at most once per hour; no-op when retention unset."""
+        if not self.retention_days:
+            return
+        now = time.monotonic()
+        if now - self._last_prune_ts < _PRUNE_INTERVAL_S:
+            return
+        self._prune_old_entries()
+
+    def _prune_old_entries(self) -> None:
+        """Rewrite audit files keeping only entries newer than `retention_days`.
+
+        Applies to current file + all rotated backups. Malformed lines are
+        kept (fail-safe: never silently drop data we can't parse).
+        Caller is responsible for holding `self._lock`.
+        """
+        if not self.retention_days:
+            return
+        cutoff = datetime.now(self._tz) - timedelta(days=self.retention_days)
+        for path in (self.path, f"{self.path}.1", f"{self.path}.2", f"{self.path}.3"):
+            if os.path.exists(path):
+                _rewrite_newer_than(path, cutoff)
+        self._last_prune_ts = time.monotonic()
+
+
+def _rewrite_newer_than(path: str, cutoff: datetime) -> None:
+    """Atomic rewrite: keep lines whose `ts` is >= cutoff (or unparseable)."""
+    tmp = f"{path}.tmp"
+    try:
+        with open(path, encoding="utf-8") as src:
+            kept = [line for line in src if _entry_newer_than(line, cutoff)]
+        with open(tmp, "w", encoding="utf-8") as dst:
+            dst.writelines(kept)
+            dst.flush()
+            os.fsync(dst.fileno())
+        os.replace(tmp, path)
+    except OSError as e:
+        log.warning("prune: rewrite %s failed: %s", path, e)
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+
+
+def _entry_newer_than(line: str, cutoff: datetime) -> bool:
+    """Return True for entries to keep. Fail-safe: malformed lines kept."""
+    try:
+        rec = json.loads(line)
+        ts = datetime.fromisoformat(rec["ts"])
+        return ts >= cutoff
+    except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+        return True

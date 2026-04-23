@@ -55,11 +55,19 @@ class AuditConfig(BaseModel):
     rotate_mb: int = 50
     timezone: str = "UTC"
     redact_literals: bool = False
+    retention_days: int | None = None  # None = keep until size-rotation drops
 
     @field_validator("path")
     @classmethod
     def _expand_path(cls, v: str) -> str:
         return str(Path(v).expanduser())
+
+    @field_validator("retention_days")
+    @classmethod
+    def _check_retention_days(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError("retention_days must be > 0 if set")
+        return v
 
 
 class Settings(BaseModel):

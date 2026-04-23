@@ -86,6 +86,7 @@ audit:
   rotate_mb: 50                  # rotates current → .1 → .2 → .3 (oldest dropped)
   timezone: UTC                  # IANA name; default UTC
   redact_literals: false         # true → SQL literals become "?" in log (PII hardening)
+  retention_days: 7              # auto-prune entries older than N days (null = off)
 ```
 
 ```
@@ -273,6 +274,8 @@ Every call lands in `audit.jsonl` — one JSON per line, append-only, `fsync`'d 
 
 Default timezone is **UTC**; override with `audit.timezone: Asia/Bangkok` (IANA). Enable `audit.redact_literals: true` to rewrite SQL literals to `?` before logging — handy when prompts may contain PII.
 
+Set `audit.retention_days: N` to auto-prune entries older than N days. Runs once at startup then at most once per hour on subsequent writes — covers both current file and rotated backups (`.1`, `.2`, `.3`). Malformed lines are kept (fail-safe). Leave unset to keep only size-based rotation (max ~4 × `rotate_mb`).
+
 ```bash
 jq 'select(.status=="rejected")' audit.jsonl     # just rejections
 jq 'select(.ms > 1000)' audit.jsonl              # slow queries
@@ -333,6 +336,7 @@ audit:
   rotate_mb: 50                        # rotate chain: current → .1 → .2 → .3
   timezone: UTC                        # IANA; default UTC
   redact_literals: false               # true → SQL literals → "?"
+  retention_days: 7                    # auto-prune entries older than N days (null = off)
 ```
 
 Supported dialects: `postgres` · `mysql` · `mssql` · `sqlite` · `oracle` · `duckdb` · `clickhouse` · `mongodb`.

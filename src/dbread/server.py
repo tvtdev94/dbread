@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.4.3"
+SERVER_VERSION = "0.5.0"
 
 
 def _tool_schemas() -> list[Tool]:
@@ -121,6 +121,7 @@ async def _run() -> None:
         settings.audit.rotate_mb,
         timezone=settings.audit.timezone,
         redact_literals=settings.audit.redact_literals,
+        retention_days=settings.audit.retention_days,
     )
 
     has_mongo = any(c.dialect == "mongodb" for c in settings.connections.values())
