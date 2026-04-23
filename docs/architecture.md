@@ -99,6 +99,10 @@ src/dbread/
 - **JSONL audit** — append-only, `grep`/`jq` friendly, resilient to crashes.
 - **stdio transport** — matches Claude Code's native MCP config.
 - **In-memory rate limit** — single-process scope; simpler than Redis (YAGNI).
+- **Two-level rate limit** (v0.3) — optional `global_rate_limit_per_min` caps
+  total QPM across all connections; AND-ed with per-connection bucket.
+  Defends against rotation attacks (prompt-injection cycling connection
+  names to multiply effective throughput). Unset by default.
 
 ## Non-Goals
 

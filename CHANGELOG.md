@@ -4,6 +4,49 @@ All notable changes to this project are documented here. This project adheres to
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-04-23
+
+External feedback pass — close 5 gaps flagged in review of v0.2.2.
+
+### Added
+
+- **`global_rate_limit_per_min`** (`Settings` level, optional). AND-ed with
+  per-connection bucket so a prompt-injection attacker can no longer rotate
+  across connection names to multiply effective throughput. Default unset
+  (backward compatible).
+- **`dbread audit` subcommand** — on-demand analysis of `audit.jsonl`.
+  Supports `--since 1h|30m|7d`, `--conn NAME`, `--slow MS`, `--rejected`
+  (grouped by reason), `--tail` (follow mode). Aggregates rotated backups
+  (`.1` / `.2` / `.3`) automatically. No 3rd-party dep.
+- **`scripts/benchmark_overhead.py`** — micro-benchmark for sqlglot
+  `validate` + `inject_limit` + rate-limit `acquire`. README now shows
+  p95 numbers; full methodology in `docs/benchmarks.md`.
+- **Dialect coverage table** in `docs/security-threat-model.md` —
+  explicit Strong / Medium ranking per dialect with softer-spot notes.
+- **Known Limitations section** in README — honest list of what dbread
+  does *not* do (best-effort parser, single-process rate limit, reactive
+  audit, no cost estimator, pre-1.0 project).
+
+### Changed
+
+- **Rate limiter** exposes `acquire_with_reason()` → `(bool, "global"|"connection"|None)`.
+  Audit log now records `rate_limit_global` / `rate_limit_connection` so
+  forensic analysis can distinguish the failing scope.
+- **README security note** promoted to top: Layer 0 is the only
+  non-bypassable guarantee; Layers 1–4 are defense-in-depth only.
+
+### Security
+
+- **+44 adversarial test cases** across 10 categories (ClickHouse system
+  functions, Oracle PL/SQL blocks, MSSQL batch tricks, PG advisory-lock
+  DoS, MySQL `INTO OUTFILE` / `LOAD_FILE` / `SLEEP` / `BENCHMARK` / `HANDLER`,
+  DuckDB `COPY` / `INSTALL` / `LOAD` / `ATTACH http://`, SQLite `ATTACH` /
+  `PRAGMA writable_schema` / `VACUUM INTO`, comment-smuggle, nested CTE-DML,
+  `SET ROLE` / `SET SESSION AUTHORIZATION`).
+- **Function blacklist additions** (driven by the new tests):
+  - ClickHouse: `remoteSecure` (camelCase form), `cluster`, `clusterAllReplicas`,
+    `file` (table-function).
+
 ## [0.2.2] - 2026-04-22
 
 ### Fixed

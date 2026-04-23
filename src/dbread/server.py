@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.2.2"
+SERVER_VERSION = "0.3.0"
 
 
 def _tool_schemas() -> list[Tool]:
@@ -172,6 +172,9 @@ def main() -> None:
         if args[0] == "init":
             from .cli import init_config
             sys.exit(init_config())
+        if args[0] == "audit":
+            from .audit_cli import main as audit_main
+            sys.exit(audit_main(args[1:]))
         print(f"unknown argument: {args[0]}. Try `dbread --help`.", file=sys.stderr)
         sys.exit(2)
     asyncio.run(_run())

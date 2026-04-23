@@ -33,6 +33,8 @@ Handing a raw database connection string to an AI is like handing a stranger you
 
 ---
 
+> ⚠️ **Security note — do not skip.** Layer 0 (a read-only DB user, [step 2b](#2b-create-a-read-only-db-user-when-pointing-at-a-real-db)) is the **only non-bypassable guarantee**. Layers 1–4 reduce blast radius and make attacks loud — they are **not substitutes**. If you point dbread at a DB where the configured user can write, a single sqlglot parser gap (past, present, or future) can let a write through. See [Known Limitations](#-known-limitations).
+
 ## ⚡ Quickstart (2 minutes, no clone needed)
 
 ### 1. Install as a tool
@@ -184,6 +186,20 @@ Full threat model: [`docs/security-threat-model.md`](docs/security-threat-model.
 
 ---
 
+## ⚡ Overhead
+
+dbread adds guard + limit-injection work on every `query`. Rough p95 per call, measured in-process (no DB round-trip):
+
+| Workload | guard.validate | guard.inject_limit | total overhead |
+|----------|---------------:|-------------------:|---------------:|
+| `SELECT 1` | ~0.17 ms | ~0.44 ms | **~0.6 ms** |
+| Realistic WHERE + ORDER BY | ~0.65 ms | ~1.28 ms | **~1.9 ms** |
+| 5-CTE 10-table join | ~3.1 ms | ~4.8 ms | **~7.9 ms** |
+
+Rate-limit `acquire`: ~1 µs. **Run `uv run python scripts/benchmark_overhead.py` on your box.** Full methodology: [`docs/benchmarks.md`](docs/benchmarks.md).
+
+---
+
 ## 📋 Example Prompts
 
 ```
@@ -222,6 +238,19 @@ jq 'select(.status=="rejected")' audit.jsonl     # just rejections
 jq 'select(.ms > 1000)' audit.jsonl              # slow queries
 jq -s 'group_by(.status)|map({s:.[0].status,n:length})' audit.jsonl   # counts
 ```
+
+No `jq`? Use the built-in analyzer:
+
+```bash
+dbread audit                     # summary: counts, top slow, top rejected
+dbread audit --since 1h          # last hour only
+dbread audit --conn analytics    # filter by connection
+dbread audit --slow 1000         # queries >= 1000 ms
+dbread audit --rejected          # only rejections, grouped by reason
+dbread audit --tail              # follow new entries (like tail -f)
+```
+
+Rotated backups (`.1` · `.2` · `.3`) are aggregated automatically.
 
 ---
 
@@ -292,6 +321,16 @@ uv run pytest tests/integration/ -v
 - CI runs on **GitHub Actions matrix**: Python 3.11/3.12 × Ubuntu/Windows.
 
 ---
+
+## ⚠️ Known Limitations
+
+Honesty pass — what dbread does *not* do:
+
+- **sqlglot is best-effort, dialect-dependent.** Coverage is strong for Postgres / MySQL / SQLite; medium for MSSQL / Oracle / ClickHouse / DuckDB. See the [dialect coverage table](docs/security-threat-model.md#dialect-coverage-layer-1). Function blacklists are deny-lists; new dialect features arrive between releases.
+- **Rate limit is single-process, in-memory.** Multiple dbread processes (multi-user install) don't share buckets. `global_rate_limit_per_min` caps one process only.
+- **Audit is reactive, not preventive.** JSONL + `dbread audit` help you notice; they don't block.
+- **No query cost estimator.** Layer 2 has `statement_timeout` and `LIMIT N`, but an expensive index-less scan that finishes in time still runs.
+- **Pre-1.0 project.** Real-world adversarial testing accumulates over time. Treat dbread as one layer of defense, not the whole perimeter.
 
 ## 📚 Docs
 

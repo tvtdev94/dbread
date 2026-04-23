@@ -44,6 +44,32 @@ Single-process MCP server on a developer workstation. Client = Claude Code (trus
 - Workstation not compromised (dbread is not a network trust boundary).
 - sqlglot keeps pace with dialect edge cases — version is pinned; re-audit on upgrade.
 
+## Dialect Coverage (Layer 1)
+
+sqlglot parses differently per dialect. Layer 1 coverage mirrors that. Layer 0 (read-only DB user) remains the non-bypassable guarantee in every cell below.
+
+| Dialect | L1 strength | What L1 catches | Known softer spots |
+|---------|-------------|-----------------|---------------------|
+| postgres | Strong | CTE-DML (DELETE/INSERT/UPDATE in WITH), `pg_sleep*`, `pg_advisory_*`, `pg_terminate_backend`, `dblink_exec`, multi-stmt, SET/RESET via top-level `Command` | New extensions ship new function names; blacklist is allow-list-adjacent |
+| mysql | Strong | `INTO OUTFILE`, `LOAD_FILE`, `SLEEP`, `BENCHMARK`, `HANDLER`, multi-stmt | Stored-procedure internals not parsed |
+| sqlite | Strong | `ATTACH`, `PRAGMA`, `VACUUM INTO` (rejected as top-level Command), multi-stmt | Virtual-table modules vary per build |
+| mssql (tsql) | Medium | `WAITFOR DELAY/TIME`, `xp_cmdshell`, `sp_configure`, `BULK INSERT`, `EXEC(...)` | Some `sp_*` parse as Anonymous funcs only when quoted; batch delimiters vary |
+| oracle | Medium | PL/SQL `BEGIN..END` blocks parse as Command (rejected), `EXEC`, `CALL` | Package-name prefix on blacklisted funcs depends on parse |
+| clickhouse | Medium | `file`, `url`, `s3`, `hdfs`, `remote`, `remoteSecure`, `cluster`, camelCase normalised | New table functions land frequently; re-audit each ClickHouse release |
+| duckdb | Medium | `read_csv`, `read_parquet`, `read_json`, `COPY TO`, `INSTALL`, `LOAD`, `ATTACH http://...` | Extensions can add new readers after `INSTALL ext; LOAD ext;` (both blocked) |
+
+**Rule of thumb:** Strong = primary dialects the project integration-tests against. Medium = parsed dialect but weaker empirical coverage; treat Layer 0 as the only guarantee.
+
+## If You Skip Layer 0
+
+Layer 0 is the only non-bypassable control. If you point dbread at a DB where the configured user has write privileges:
+
+- A single sqlglot parser gap could let a write through (one day, for one dialect).
+- Function blacklists are deny-lists; novel ClickHouse/DuckDB functions arrive between our releases.
+- Every "Medium" row above becomes a direct attack surface, not a defense-in-depth layer.
+
+**Do not skip step 2b of the README.** All other layers are defense-in-depth, not substitutes.
+
 ## Response Plan
 
 - Layer 1 bypass discovered → Layer 0 prevents damage → patch guard → release.

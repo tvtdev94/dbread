@@ -72,8 +72,11 @@ FUNCTION_BLACKLIST = {
     "dbms_xmlgen", "utl_file", "utl_http",
     # ClickHouse - external readers / table functions that pierce the DB
     # boundary (fetch from remote hosts, cloud storage, other DBs).
-    "url", "s3", "hdfs", "remote", "remote_secure",
+    # ClickHouse uses camelCase; match the lowercased form.
+    "url", "s3", "hdfs", "remote", "remotesecure", "remote_secure",
+    "cluster", "clusterallreplicas",
     "mysql_table", "postgresql_table", "mongodb",
+    "file",  # ClickHouse file(path) table function
     # DuckDB - file readers (powerful analytics features, but also Layer-1
     # bypass of the DB-user filesystem isolation). Two forms below:
     #   - lowercase string: matches typed AST class names (readcsv, readparquet)

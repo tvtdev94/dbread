@@ -29,3 +29,8 @@ audit:
   rotate_mb: 50                 # rotates current -> .1 -> .2 -> .3 (oldest dropped)
   timezone: UTC                 # IANA name, e.g. "Asia/Bangkok"; unknown -> UTC
   redact_literals: false        # true: SQL literals -> "?" in log (PII hardening)
+
+# Optional: cap total QPM across ALL connections (AND-ed with per-conn limit).
+# Defends against rotation attacks where a prompt-injection cycles connection
+# names to multiply effective throughput. Leave unset for backward compat.
+# global_rate_limit_per_min: 200
