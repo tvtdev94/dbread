@@ -45,6 +45,10 @@ audit:
   rotate_mb: 50
   timezone: UTC              # IANA name; default UTC
   redact_literals: false     # true -> SQL literals masked to "?" in log
+
+# Optional: cap total QPM across ALL connections (AND-ed with per-conn limit).
+# Defends against rotation attacks. Leave commented for backward compat.
+# global_rate_limit_per_min: 200
 """
 
 
@@ -120,6 +124,7 @@ dbread - read-only database MCP proxy for AI.
 USAGE:
   dbread                 start the MCP stdio server (expects DBREAD_CONFIG)
   dbread init            scaffold ~/.dbread/ with a SQLite demo
+  dbread audit [opts]    analyze audit.jsonl (--since, --conn, --slow, --rejected, --tail)
   dbread --version       print version
   dbread --help          print this help
 """

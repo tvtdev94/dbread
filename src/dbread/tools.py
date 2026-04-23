@@ -89,9 +89,11 @@ class ToolHandlers:
         )
         sql_to_run = self.guard.inject_limit(sql, cfg.dialect, effective)
 
-        if not self.rl.acquire(connection):
-            self.audit.log(connection, sql, "rejected", reason="rate_limit", dialect=cfg.dialect)
-            raise ToolError("rate_limit_exceeded")
+        granted, scope = self.rl.acquire_with_reason(connection)
+        if not granted:
+            reason = f"rate_limit_{scope}" if scope else "rate_limit"
+            self.audit.log(connection, sql, "rejected", reason=reason, dialect=cfg.dialect)
+            raise ToolError(f"rate_limit_exceeded: {scope}" if scope else "rate_limit_exceeded")
 
         engine = self.cm.get_engine(connection)
         t0 = time.perf_counter()
@@ -126,9 +128,11 @@ class ToolHandlers:
 
         explain_sql = _build_explain(sql, cfg.dialect)
 
-        if not self.rl.acquire(connection):
-            self.audit.log(connection, sql, "rejected", reason="rate_limit", dialect=cfg.dialect)
-            raise ToolError("rate_limit_exceeded")
+        granted, scope = self.rl.acquire_with_reason(connection)
+        if not granted:
+            reason = f"rate_limit_{scope}" if scope else "rate_limit"
+            self.audit.log(connection, sql, "rejected", reason=reason, dialect=cfg.dialect)
+            raise ToolError(f"rate_limit_exceeded: {scope}" if scope else "rate_limit_exceeded")
 
         engine = self.cm.get_engine(connection)
         t0 = time.perf_counter()

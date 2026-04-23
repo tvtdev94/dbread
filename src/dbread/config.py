@@ -53,6 +53,14 @@ class AuditConfig(BaseModel):
 class Settings(BaseModel):
     connections: dict[str, ConnectionConfig]
     audit: AuditConfig = AuditConfig()
+    global_rate_limit_per_min: int | None = None
+
+    @field_validator("global_rate_limit_per_min")
+    @classmethod
+    def _check_global_rate(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError("global_rate_limit_per_min must be > 0 if set")
+        return v
 
     @model_validator(mode="after")
     def _check_connections(self) -> Settings:

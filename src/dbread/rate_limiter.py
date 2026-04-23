@@ -1,4 +1,4 @@
-"""Per-connection token-bucket rate limiter (thread-safe, in-memory)."""
+"""Token-bucket rate limiter: per-connection + optional global (thread-safe)."""
 
 from __future__ import annotations
 
@@ -33,16 +33,37 @@ class RateLimiter:
         self.settings = settings
         self._buckets: dict[str, TokenBucket] = {}
         self._lock = threading.Lock()
+        g = getattr(settings, "global_rate_limit_per_min", None)
+        self._global: TokenBucket | None = TokenBucket(g) if g else None
 
     def acquire(self, connection: str) -> bool:
+        granted, _ = self.acquire_with_reason(connection)
+        return granted
+
+    def acquire_with_reason(self, connection: str) -> tuple[bool, str | None]:
+        """Acquire token from global (if set) + per-connection bucket (AND).
+
+        Returns (granted, scope_if_denied). scope is "global" or "connection".
+        Global is checked first (cheaper fail-fast; also avoids per-conn
+        token debit when global is already exhausted).
+        """
+        if self._global is not None and not self._global.acquire():
+            return False, "global"
+        bucket = self._get_bucket(connection)
+        if not bucket.acquire():
+            return False, "connection"
+        return True, None
+
+    def _get_bucket(self, connection: str) -> TokenBucket:
         bucket = self._buckets.get(connection)
-        if bucket is None:
-            with self._lock:
-                bucket = self._buckets.get(connection)
-                if bucket is None:
-                    cfg = self.settings.connections.get(connection)
-                    if cfg is None:
-                        raise KeyError(f"unknown connection: {connection!r}")
-                    bucket = TokenBucket(cfg.rate_limit_per_min)
-                    self._buckets[connection] = bucket
-        return bucket.acquire()
+        if bucket is not None:
+            return bucket
+        with self._lock:
+            bucket = self._buckets.get(connection)
+            if bucket is None:
+                cfg = self.settings.connections.get(connection)
+                if cfg is None:
+                    raise KeyError(f"unknown connection: {connection!r}")
+                bucket = TokenBucket(cfg.rate_limit_per_min)
+                self._buckets[connection] = bucket
+            return bucket
