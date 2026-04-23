@@ -8,14 +8,14 @@
 
 [![PyPI](https://img.shields.io/pypi/v/dbread?color=3775a9&logo=pypi&logoColor=white)](https://pypi.org/project/dbread/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
-[![MCP](https://img.shields.io/badge/MCP-1.27+-6e56cf?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io/)
+[![MCP](https://img.shields.io/badge/MCP-1.0+-6e56cf?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io/)
 [![CI](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml/badge.svg)](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/tests-274%20passing-22c55e)](#-testing)
 [![Coverage](https://img.shields.io/badge/coverage-87%25-0891b2)](#-testing)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-de5fe9)](https://docs.astral.sh/uv/)
 [![License MIT](https://img.shields.io/badge/license-MIT-94a3b8)](LICENSE)
 
-[**Why**](#-why) · [**Quickstart**](#-quickstart-5-minutes) · [**Tools**](#-tools) · [**Security Model**](#%EF%B8%8F-security-model) · [**Docs**](#-docs)
+[**Why**](#-why) · [**Quickstart**](#-quickstart-2-minutes-no-clone-needed) · [**Tools**](#-tools) · [**Security Model**](#%EF%B8%8F-security-model) · [**Update**](#-update) · [**Docs**](#-docs)
 
 </div>
 
@@ -70,6 +70,17 @@ connections:
     rate_limit_per_min: 60
     statement_timeout_s: 30
     max_rows: 1000
+
+  # Optional: MongoDB (requires `uv tool install "dbread[mongo]"`)
+  # analytics_mongo:
+  #   url_env: MONGO_URL
+  #   dialect: mongodb
+  #   rate_limit_per_min: 60
+  #   statement_timeout_s: 30    # becomes maxTimeMS=30000 per command
+  #   max_rows: 1000
+  #   mongo:
+  #     sample_size: 100         # docs sampled by describe_table (10-1000)
+
 audit:
   path: ~/.dbread/audit.jsonl   # ~ expansion supported
   rotate_mb: 50                  # rotates current → .1 → .2 → .3 (oldest dropped)
@@ -80,6 +91,7 @@ audit:
 ```
 # ~/.dbread/.env
 MYDB_URL=postgresql+psycopg2://ai_readonly:password@host:5432/mydb
+# MONGO_URL=mongodb://ai_ro:password@host:27017/analytics?tls=true
 ```
 
 ### 4. Register with Claude Code
@@ -340,13 +352,43 @@ Honesty pass — what dbread does *not* do:
 - **Mongo schema is sampled, not authoritative** (default 100 docs). Rare fields may be missed — bump `mongo.sample_size` (max 1000) if needed.
 - **No Atlas Search / `$search` / `$vectorSearch` support.** Deferred to v0.5+.
 
+---
+
+## 🔄 Update
+
+Already installed and want the latest release?
+
+```bash
+# Installed via `uv tool install` — upgrade in place:
+uv tool upgrade dbread
+
+# Want to add extras at the same time (e.g. MongoDB support):
+uv tool install --force "dbread[postgres,mongo]"
+
+# Running one-shot via uvx — refresh the cache so it pulls the new version:
+uvx --refresh --from "dbread[mongo]" dbread --version
+```
+
+Then in Claude Code: `/mcp` → pick `dbread` → **Reconnect** so the refreshed
+tool list is fetched. Verify with:
+
+```bash
+dbread --version
+```
+
+Working from a git checkout (source install)? Run `bash scripts/dev-install.sh`
+(or the `.ps1` variant) — see the [Development](#%EF%B8%8F-development) section.
+
+---
+
 ## 📚 Docs
 
 | Document | What's in it |
 |----------|--------------|
-| [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) | **Copy-paste SQL** for Layer 0 DB user on PG / MySQL / MSSQL / Oracle / SQLite |
+| [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) | **Copy-paste SQL / Mongo** for Layer 0 read-only user on PG / MySQL / MSSQL / Oracle / SQLite / DuckDB / ClickHouse / MongoDB |
 | [`docs/architecture.md`](docs/architecture.md) | Component diagram · 5-layer details · data flow · design decisions |
 | [`docs/security-threat-model.md`](docs/security-threat-model.md) | Full STRIDE analysis · residual risks · response plan |
+| [`docs/benchmarks.md`](docs/benchmarks.md) | Overhead methodology + per-workload p95 numbers |
 | [`docs/manual-smoke-test.md`](docs/manual-smoke-test.md) | Step-by-step checklist for verifying integration with Claude Code |
 
 ---
@@ -355,13 +397,15 @@ Honesty pass — what dbread does *not* do:
 
 ```
 src/dbread/
-├── server.py         # MCP stdio entry — registers 5 tools
-├── tools.py          # tool handlers (guard → limit → rate → exec → audit)
+├── server.py         # MCP stdio entry — registers 5 tools, dispatches to handlers
+├── tools.py          # SQL tool handlers (guard → limit → rate → exec → audit)
 ├── sql_guard.py      # sqlglot AST validator + LIMIT injection
-├── rate_limiter.py   # thread-safe token bucket per connection
+├── rate_limiter.py   # thread-safe token bucket per connection + global cap
 ├── connections.py    # SQLAlchemy engine manager (lazy, per-dialect)
 ├── config.py         # pydantic Settings (YAML + env)
-├── audit.py          # append-only JSONL with size rotation
+├── audit.py          # append-only JSONL with fsync + size rotation + redaction
+├── audit_cli.py      # `dbread audit` analyzer (since/conn/slow/rejected/tail)
+├── cli.py            # `dbread init` scaffolding + --help / --version
 └── mongo/
     ├── client.py     # MongoClient manager (one per connection name)
     ├── guard.py      # allowlist validator + limit injection for commands
@@ -369,7 +413,8 @@ src/dbread/
     └── tools.py      # Mongo tool handlers (list/describe/query/explain)
 ```
 
-Every source file is **under 200 LOC** — designed to be readable end-to-end.
+Every core runtime module stays **small and single-purpose** — most files sit
+under 200 LOC so the whole stack is readable end-to-end in a single sitting.
 
 ---
 
