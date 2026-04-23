@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.5.0"
+SERVER_VERSION = "0.6.0"
 
 
 def _tool_schemas() -> list[Tool]:
@@ -207,6 +207,10 @@ def main() -> None:
         if args[0] == "init":
             from .cli import init_config
             sys.exit(init_config())
+        if args[0] == "install-skill":
+            from .cli import install_skill
+            force = "--force" in args[1:]
+            sys.exit(install_skill(force=force))
         if args[0] == "audit":
             from .audit_cli import main as audit_main
             sys.exit(audit_main(args[1:]))

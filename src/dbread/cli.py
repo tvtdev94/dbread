@@ -1,9 +1,12 @@
 """CLI subcommands for dbread (bootstrap + help).
 
 `dbread` (no args) starts the MCP stdio server. Subcommands:
-  dbread init       -- scaffold ~/.dbread/{config.yaml, .env, sample.db}
-  dbread --version  -- print package version
-  dbread --help     -- print short help
+  dbread init            -- scaffold ~/.dbread/{config.yaml, .env, sample.db}
+                            + auto-install Claude Code skill when ~/.claude
+                            is detected
+  dbread install-skill   -- install / reinstall ~/.claude/skills/dbread/SKILL.md
+  dbread --version       -- print package version
+  dbread --help          -- print short help
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import sys
+from importlib import resources
 from pathlib import Path
 
 
@@ -77,8 +81,49 @@ def _seed_sample_db(path: Path) -> None:
         os.chmod(path, 0o444)
 
 
+def _claude_skills_dir() -> Path:
+    """Location Claude Code reads personal skills from."""
+    return Path.home() / ".claude" / "skills"
+
+
+def _bundled_skill_text() -> str:
+    """Read the SKILL.md shipped inside the wheel (src/dbread/assets/skill.md)."""
+    return resources.files("dbread.assets").joinpath("skill.md").read_text(encoding="utf-8")
+
+
+def install_skill(*, force: bool = False, quiet: bool = False) -> int:
+    """Install the Claude Code skill at ~/.claude/skills/dbread/SKILL.md.
+
+    Idempotent: skips if the file exists and `force` is False. The user's
+    `~/.claude` directory is required — we don't create it (that's owned
+    by Claude Code itself) to avoid polluting the home dir.
+    """
+    claude_dir = Path.home() / ".claude"
+    if not claude_dir.is_dir():
+        if not quiet:
+            print("skip     ~/.claude not found (install Claude Code first)")
+        return 0
+
+    target_dir = _claude_skills_dir() / "dbread"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / "SKILL.md"
+
+    if target.exists() and not force:
+        if not quiet:
+            print(f"skipped  {target} (already exists; use --force to reinstall)")
+        return 0
+
+    target.write_text(_bundled_skill_text(), encoding="utf-8")
+    print(f"{'updated' if force else 'created'}  {target}")
+    return 0
+
+
 def init_config() -> int:
-    """Scaffold ~/.dbread/ with a working SQLite demo. Idempotent."""
+    """Scaffold ~/.dbread/ with a working SQLite demo. Idempotent.
+
+    Also installs the Claude Code skill when ~/.claude is detected so the
+    AI agent immediately knows the query workflow and error-handling rules.
+    """
     home = _home_dir()
     home.mkdir(parents=True, exist_ok=True)
     cfg_path = home / "config.yaml"
@@ -111,6 +156,9 @@ def init_config() -> int:
     for p in skipped:
         print(f"skipped  {p} (already exists)")
 
+    # Opportunistic skill install — only when Claude Code is present.
+    install_skill(quiet=True)
+
     print()
     print("Register with Claude Code:")
     print("  claude mcp add --scope user dbread \\")
@@ -123,11 +171,12 @@ _HELP = """\
 dbread - read-only database MCP proxy for AI.
 
 USAGE:
-  dbread                 start the MCP stdio server (expects DBREAD_CONFIG)
-  dbread init            scaffold ~/.dbread/ with a SQLite demo
-  dbread audit [opts]    analyze audit.jsonl (--since, --conn, --slow, --rejected, --tail)
-  dbread --version       print version
-  dbread --help          print this help
+  dbread                         start the MCP stdio server (expects DBREAD_CONFIG)
+  dbread init                    scaffold ~/.dbread/ + install Claude Code skill
+  dbread install-skill [--force] install / reinstall ~/.claude/skills/dbread/SKILL.md
+  dbread audit [opts]            analyze audit.jsonl (--since, --conn, --slow, --rejected, --tail)
+  dbread --version               print version
+  dbread --help                  print this help
 """
 
 

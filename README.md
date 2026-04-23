@@ -55,6 +55,8 @@ dbread init
 
 Creates `~/.dbread/config.yaml`, `~/.dbread/.env`, and `~/.dbread/sample.db` (a tiny read-only SQLite demo so everything works immediately). Prints the exact `claude mcp add` line to paste in step 4. Skip to step 4 if you only want the demo; otherwise edit `config.yaml` / `.env` first (step 3).
 
+> 💡 **Claude Code users**: `dbread init` also installs a **skill** at `~/.claude/skills/dbread/SKILL.md` that teaches Claude the safe query workflow (discover → describe → query), SQL vs MongoDB routing, and how to recover from guard / rate-limit errors. Reinstall later with `dbread install-skill --force` after upgrading.
+
 ### 2b. Create a read-only DB user (when pointing at a real DB)
 
 See [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) — copy-paste SQL/Mongo snippets for PostgreSQL / MySQL / MSSQL / Oracle / SQLite / DuckDB / ClickHouse / **MongoDB**, plus compat notes for CockroachDB · Timescale · Aurora · SingleStore · PlanetScale · Yugabyte · DocumentDB · CosmosDB.
