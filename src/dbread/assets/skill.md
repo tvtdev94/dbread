@@ -104,6 +104,21 @@ config.
 **User**: "Delete inactive users."
 **You**: Refuse. dbread blocks all writes. Suggest the user run that DELETE manually through a tool with write privileges — dbread explicitly does not support it for safety.
 
+## Troubleshooting
+
+### Missing driver errors
+
+If a query returns an error like `ModuleNotFoundError: No module named 'psycopg2'` or similar driver import failure,
+the connection's dialect needs an extra driver installed. Tell the user to run:
+
+```bash
+dbread doctor          # see which drivers are missing
+dbread add-extra <name>  # install (e.g. add-extra mongo)
+```
+
+`dbread add-extra` is safe to run multiple times — it preserves all previously-installed extras (a bare
+`uv tool install dbread[mongo]` would NOT preserve them).
+
 ## Don't do
 
 - Don't call `query` before `describe_table` unless the user explicitly lists column names.
