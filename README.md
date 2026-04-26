@@ -253,7 +253,7 @@ dbread is also a CLI for setup, troubleshooting, and audit analysis.
 | `dbread add [name]` | **Interactive wizard** — paste any connection string, auto-detect & convert |
 | `dbread add-extra <e1> ...` | Install additional driver extras **without losing existing ones** |
 | `dbread list-extras` | Show tracked vs actually-importable extras |
-| `dbread doctor` | Check `config.yaml` dialects against installed drivers; print fix command |
+| `dbread doctor` | Per-connection health table — driver check + **live ping** (5s, parallel) + summary stats + smart fix hints. Use `--quick` to skip live tests. |
 | `dbread audit [opts]` | Analyze `audit.jsonl` (`--since`, `--conn`, `--slow`, `--rejected`, `--tail`) |
 | `dbread install-skill [--force]` | Install/refresh the Claude Code skill |
 | `dbread --version` / `--help` | Self-explanatory |
