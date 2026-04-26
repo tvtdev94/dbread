@@ -158,6 +158,21 @@ This skill (`~/.claude/skills/dbread/SKILL.md`) auto-refreshes on the **next**
 `dbread install-skill --force` needed. Tell the user to restart Claude Code
 afterwards so the new skill is loaded for the current session.
 
+### Upgrade fails on Windows: `os error 32` / "being used by another process"
+
+This is the file-lock error users hit when running `uv tool upgrade dbread` on
+Windows while Claude Code is open — `dbread.exe` is locked by the running MCP
+server. Tell them to:
+
+```powershell
+# Quit Claude Code completely (not just minimize), then:
+Get-Process dbread -ErrorAction SilentlyContinue | Stop-Process -Force
+uv tool upgrade dbread
+# Then reopen Claude Code.
+```
+
+Linux/macOS don't have this restriction (running binaries can be replaced).
+
 ## Don't do
 
 - Don't call `query` before `describe_table` unless the user explicitly lists column names.

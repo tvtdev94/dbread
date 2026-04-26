@@ -461,6 +461,11 @@ dbread list-extras
 > `~/.claude/skills/dbread/SKILL.md` is silently refreshed if its content has changed. No manual
 > `dbread install-skill --force` needed. Restart Claude Code to pick up the new skill in your session.
 
+> ⚠️ **Windows: close Claude Code before upgrading.** `dbread.exe` is a running process when Claude Code is open,
+> and Windows refuses to overwrite a running `.exe` (`os error 32: ... being used by another process`). Quit
+> Claude Code (or kill stray processes with `Get-Process dbread | Stop-Process -Force`) before
+> `uv tool upgrade dbread`, then reopen. Linux/macOS don't have this restriction.
+
 Working from a git checkout (source install)? Run `bash scripts/dev-install.sh` (or the `.ps1` variant) — see the
 [Development](#%EF%B8%8F-development) section.
 
