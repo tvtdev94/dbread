@@ -473,6 +473,7 @@ Working from a git checkout (source install)? Run `bash scripts/dev-install.sh` 
 | [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) | **Copy-paste SQL / Mongo** for Layer 0 read-only user on PG / MySQL / MSSQL / Oracle / SQLite / DuckDB / ClickHouse / MongoDB |
 | [`docs/cli-reference.md`](docs/cli-reference.md) | Complete CLI reference for all `dbread` commands with examples and exit codes |
 | [`docs/connection-string-formats.md`](docs/connection-string-formats.md) | Every format `dbread add` recognises + SQLAlchemy URL templates per dialect + fallback options |
+| [`docs/release-process.md`](docs/release-process.md) | Auto-publish pipeline (GitHub Actions → PyPI) — how to release, safety gates, troubleshooting |
 | [`docs/architecture.md`](docs/architecture.md) | Component diagram · 5-layer details · data flow · design decisions |
 | [`docs/security-threat-model.md`](docs/security-threat-model.md) | Full STRIDE analysis · residual risks · response plan |
 | [`docs/benchmarks.md`](docs/benchmarks.md) | Overhead methodology + per-workload p95 numbers |
