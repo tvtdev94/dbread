@@ -277,6 +277,14 @@ def cmd_doctor(args: list[str] | None = None) -> int:
         print(f"FAIL  No config file at {cfg_path}\n\nFix:\n  dbread init")
         return 3
 
+    # Load sibling .env so url_env references resolve. Mirrors server.py:_run().
+    # Without this, doctor's live-test step would see empty env vars and fail
+    # with confusing "could not connect" errors when the URL is actually fine.
+    env_path = Path(cfg_path).resolve().parent / ".env"
+    if env_path.is_file():
+        from dotenv import load_dotenv  # noqa: PLC0415
+        load_dotenv(env_path, override=False)
+
     try:
         from dbread.config import Settings  # noqa: PLC0415
         cfg = Settings.load(cfg_path)
