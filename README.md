@@ -10,12 +10,12 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-1.0+-6e56cf?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io/)
 [![CI](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml/badge.svg)](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-274%20passing-22c55e)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-539%20passing-22c55e)](#-testing)
 [![Coverage](https://img.shields.io/badge/coverage-87%25-0891b2)](#-testing)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-de5fe9)](https://docs.astral.sh/uv/)
 [![License MIT](https://img.shields.io/badge/license-MIT-94a3b8)](LICENSE)
 
-[**Why**](#-why) · [**Quickstart**](#-quickstart-2-minutes-no-clone-needed) · [**Tools**](#-tools) · [**Security Model**](#%EF%B8%8F-security-model) · [**Update**](#-update) · [**Docs**](#-docs)
+[**Why**](#-why) · [**Quickstart**](#-quickstart-2-minutes-no-clone-needed) · [**Add a connection**](#2c-add-your-real-connection-one-command) · [**CLI**](#-cli-commands) · [**Tools**](#-tools) · [**Security**](#%EF%B8%8F-security-model) · [**Update**](#-update--add-more-drivers) · [**Docs**](#-docs)
 
 </div>
 
@@ -47,6 +47,8 @@ uv tool install "dbread[postgres]"          # extras: postgres, mysql, mssql, or
 uv tool install "git+https://github.com/tvtdev94/dbread[postgres]"
 ```
 
+> 💡 Pick the extras you need now. To add more drivers later, use `dbread add-extra <name>` (preserves prior).
+
 ### 2. Scaffold config (one command)
 
 ```bash
@@ -60,6 +62,38 @@ Creates `~/.dbread/config.yaml`, `~/.dbread/.env`, and `~/.dbread/sample.db` (a 
 ### 2b. Create a read-only DB user (when pointing at a real DB)
 
 See [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) — copy-paste SQL/Mongo snippets for PostgreSQL / MySQL / MSSQL / Oracle / SQLite / DuckDB / ClickHouse / **MongoDB**, plus compat notes for CockroachDB · Timescale · Aurora · SingleStore · PlanetScale · Yugabyte · DocumentDB · CosmosDB.
+
+### 2c. Add your real connection (one command)
+
+Have a connection string from a tool, cloud console, or `.NET` / JDBC / ODBC config? Don't hand-edit YAML:
+
+```bash
+dbread add
+```
+
+Paste your connection string when prompted (input is hidden — safe for passwords). dbread:
+
+1. **Auto-detects** the format — URI · JDBC · ADO.NET / C# · ODBC · MongoDB Atlas (`mongodb+srv://`) · MotherDuck · file path
+2. **Converts** to the right SQLAlchemy URL with the correct `+driver` suffix and URL-escaped password
+3. **Tests** with `SELECT 1` (or Mongo `ping`) — fail-fast before saving
+4. **Writes** `~/.dbread/.env` (chmod `0600` on POSIX) + `~/.dbread/config.yaml` (preserves your comments)
+
+Supports PostgreSQL · MySQL · MSSQL · Oracle · SQLite · DuckDB · ClickHouse · MongoDB.
+
+```bash
+# Common flags:
+dbread add prod_pg                          # provide a name (otherwise prompted)
+dbread add --no-test                        # skip the live connection test
+dbread add --dialect-hint mssql             # force dialect when ambiguous
+dbread add --manual --dialect-hint postgres # skip detection, paste a SQLAlchemy URL directly
+dbread add --from-stdin < my-conn.txt       # script-friendly (non-interactive)
+```
+
+> 💡 **Auto-detect failed?** dbread offers a fallback menu — paste a SQLAlchemy URL manually, generate a
+> copy-paste config template, or cancel. Same recovery if the live test fails (save anyway / edit & retry / cancel).
+
+See [`docs/connection-string-formats.md`](docs/connection-string-formats.md) for all recognised formats and
+URL templates per dialect, and [`docs/cli-reference.md`](docs/cli-reference.md) for the complete CLI reference.
 
 ### 3. Create `config.yaml` + `.env`
 
@@ -208,6 +242,26 @@ npx -p @mermaid-js/mermaid-cli mmdc \
 
 ---
 
+## 💻 CLI Commands
+
+dbread is also a CLI for setup, troubleshooting, and audit analysis.
+
+| Command | Purpose |
+|---------|---------|
+| `dbread` | Start the MCP stdio server (reads `DBREAD_CONFIG`) |
+| `dbread init` | Scaffold `~/.dbread/{config.yaml,.env,sample.db}` + install Claude skill |
+| `dbread add [name]` | **Interactive wizard** — paste any connection string, auto-detect & convert |
+| `dbread add-extra <e1> ...` | Install additional driver extras **without losing existing ones** |
+| `dbread list-extras` | Show tracked vs actually-importable extras |
+| `dbread doctor` | Check `config.yaml` dialects against installed drivers; print fix command |
+| `dbread audit [opts]` | Analyze `audit.jsonl` (`--since`, `--conn`, `--slow`, `--rejected`, `--tail`) |
+| `dbread install-skill [--force]` | Install/refresh the Claude Code skill |
+| `dbread --version` / `--help` | Self-explanatory |
+
+Full reference: [`docs/cli-reference.md`](docs/cli-reference.md).
+
+---
+
 ## 🛡️ Security Model
 
 | Layer | Mechanism | What it rejects |
@@ -351,7 +405,7 @@ Compat (no new dialect): CockroachDB, TimescaleDB, Aurora PG (use `postgres`) ·
 
 ```bash
 uv sync --extra dev
-uv run pytest                          # 274 passing
+uv run pytest                          # 539 passing
 uv run pytest --cov=dbread             # coverage report (87% overall)
 uv run ruff check src/                 # lint
 
@@ -360,11 +414,11 @@ cd tests/integration && docker compose up -d
 uv run pytest tests/integration/ -v
 ```
 
-- **260+ unit tests** cover config, connections, audit (fsync/tz/redact/rotate), SQL guard (**57 evasion cases incl. WAITFOR & sleep variants**), Mongo guard (**22 adversarial cases — $out/$merge smuggling, JS exec, cross-DB $lookup, deep nesting**), rate limiter, tools.
+- **520+ unit tests** cover config, connections, audit (fsync/tz/redact/rotate), SQL guard (**57 evasion cases incl. WAITFOR & sleep variants**), Mongo guard (**22 adversarial cases — $out/$merge smuggling, JS exec, cross-DB $lookup, deep nesting**), rate limiter, tools, **plus the v0.7 connection-string parsers** (84 tests across 6 format families × 8 dialects), **converter** (54 tests), **wizard + writers** (47 tests), **extras tracking** (36 tests), **CLI** (22 tests).
 - **4 subprocess smoke tests** drive `server.py` via real stdio JSON-RPC.
 - **4 SQLite + 4 DuckDB E2E tests** always run (no Docker).
 - **PG + MySQL + ClickHouse + MongoDB E2E tests** skip gracefully without Docker.
-- CI runs on **GitHub Actions matrix**: Python 3.11/3.12 × Ubuntu/Windows.
+- CI runs on **GitHub Actions matrix**: Python 3.11/3.12 × Ubuntu/Windows + a dedicated `extras-install-order` job that proves `dbread add-extra` preserves prior drivers.
 
 ---
 
@@ -383,30 +437,27 @@ Honesty pass — what dbread does *not* do:
 
 ---
 
-## 🔄 Update
-
-Already installed and want the latest release?
+## 🔄 Update / add more drivers
 
 ```bash
-# Installed via `uv tool install` — upgrade in place:
+# Upgrade to latest:
 uv tool upgrade dbread
 
-# Want to add extras at the same time (e.g. MongoDB support):
-uv tool install --force "dbread[postgres,mongo]"
+# Add a new driver later WITHOUT losing existing ones:
+dbread add-extra mongo
+# (under the hood: uv tool install --force "dbread[postgres,mysql,mongo,...]")
 
-# Running one-shot via uvx — refresh the cache so it pulls the new version:
-uvx --refresh --from "dbread[mongo]" dbread --version
+# Check what's installed and what your config needs:
+dbread doctor
+dbread list-extras
 ```
 
-Then in Claude Code: `/mcp` → pick `dbread` → **Reconnect** so the refreshed
-tool list is fetched. Verify with:
+> ⚠️ **Why `add-extra` instead of `uv tool install dbread[mongo]`?** Because `uv tool install` always recreates the
+> tool environment, dropping previously-installed extras. `dbread add-extra` tracks the union of all installed extras
+> and reinstalls correctly so you never lose drivers you already had.
 
-```bash
-dbread --version
-```
-
-Working from a git checkout (source install)? Run `bash scripts/dev-install.sh`
-(or the `.ps1` variant) — see the [Development](#%EF%B8%8F-development) section.
+Working from a git checkout (source install)? Run `bash scripts/dev-install.sh` (or the `.ps1` variant) — see the
+[Development](#%EF%B8%8F-development) section.
 
 ---
 
@@ -415,6 +466,8 @@ Working from a git checkout (source install)? Run `bash scripts/dev-install.sh`
 | Document | What's in it |
 |----------|--------------|
 | [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md) | **Copy-paste SQL / Mongo** for Layer 0 read-only user on PG / MySQL / MSSQL / Oracle / SQLite / DuckDB / ClickHouse / MongoDB |
+| [`docs/cli-reference.md`](docs/cli-reference.md) | Complete CLI reference for all `dbread` commands with examples and exit codes |
+| [`docs/connection-string-formats.md`](docs/connection-string-formats.md) | Every format `dbread add` recognises + SQLAlchemy URL templates per dialect + fallback options |
 | [`docs/architecture.md`](docs/architecture.md) | Component diagram · 5-layer details · data flow · design decisions |
 | [`docs/security-threat-model.md`](docs/security-threat-model.md) | Full STRIDE analysis · residual risks · response plan |
 | [`docs/benchmarks.md`](docs/benchmarks.md) | Overhead methodology + per-workload p95 numbers |
@@ -426,20 +479,37 @@ Working from a git checkout (source install)? Run `bash scripts/dev-install.sh`
 
 ```
 src/dbread/
-├── server.py         # MCP stdio entry — registers 5 tools, dispatches to handlers
-├── tools.py          # SQL tool handlers (guard → limit → rate → exec → audit)
-├── sql_guard.py      # sqlglot AST validator + LIMIT injection
-├── rate_limiter.py   # thread-safe token bucket per connection + global cap
-├── connections.py    # SQLAlchemy engine manager (lazy, per-dialect)
-├── config.py         # pydantic Settings (YAML + env)
-├── audit.py          # append-only JSONL with fsync + size rotation + redaction
-├── audit_cli.py      # `dbread audit` analyzer (since/conn/slow/rejected/tail)
-├── cli.py            # `dbread init` scaffolding + --help / --version
-└── mongo/
-    ├── client.py     # MongoClient manager (one per connection name)
-    ├── guard.py      # allowlist validator + limit injection for commands
-    ├── schema.py     # sample-based schema inference
-    └── tools.py      # Mongo tool handlers (list/describe/query/explain)
+├── server.py            # MCP stdio entry — registers 5 tools, dispatches to handlers
+├── tools.py             # SQL tool handlers (guard → limit → rate → exec → audit)
+├── sql_guard.py         # sqlglot AST validator + LIMIT injection
+├── rate_limiter.py      # thread-safe token bucket per connection + global cap
+├── connections.py       # SQLAlchemy engine manager (lazy, per-dialect)
+├── config.py            # pydantic Settings (YAML + env)
+├── audit.py             # append-only JSONL with fsync + size rotation + redaction
+├── audit_cli.py         # `dbread audit` analyzer (since/conn/slow/rejected/tail)
+├── cli.py               # CLI dispatcher: init, add, add-extra, list-extras, doctor, audit, ...
+├── mongo/               # MongoDB stack
+│   ├── client.py        # MongoClient manager (one per connection name)
+│   ├── guard.py         # allowlist validator + limit injection for commands
+│   ├── schema.py        # sample-based schema inference
+│   └── tools.py         # Mongo tool handlers (list/describe/query/explain)
+├── extras/              # NEW v0.7 — driver-extra tracking
+│   ├── manager.py       # state file (~/.dbread/installed_extras.json) + find_spec scan
+│   └── installer.py     # subprocess wrapper: `uv tool install --force "dbread[<union>]"`
+└── connstr/             # NEW v0.7 — `dbread add` connection-string wizard
+    ├── types.py         # ParsedConn dataclass + UnsupportedConnString / UnknownFormat
+    ├── detector.py      # priority-ordered format dispatch
+    ├── converter.py     # ParsedConn → SQLAlchemy URL (URL.create + Mongo hand-build)
+    ├── wizard.py        # interactive 10-step flow (paste → detect → test → write)
+    ├── writers.py       # comment-preserving .env / config.yaml writers
+    ├── _manual_entry.py # fallback: manual URL entry + template generator
+    └── parsers/         # one per format family
+        ├── uri.py       # postgresql://, mysql://, mongodb://, mongodb+srv://, ...
+        ├── jdbc.py      # jdbc:postgresql://, jdbc:oracle:thin:@..., ...
+        ├── adonet.py    # Server=...;Database=...;User Id=...;Password=...; (C# / .NET)
+        ├── odbc.py      # Driver={ODBC Driver 17 for SQL Server};Server=...;...
+        ├── cloud.py     # mongodb+srv://, MotherDuck md:, *.clickhouse.cloud
+        └── filepath.py  # *.db / *.sqlite / *.duckdb / :memory:
 ```
 
 Every core runtime module stays **small and single-purpose** — most files sit

@@ -1,10 +1,14 @@
-"""CLI subcommands for dbread (bootstrap + help).
+"""CLI subcommands for dbread (bootstrap + help + extras management).
 
 `dbread` (no args) starts the MCP stdio server. Subcommands:
   dbread init            -- scaffold ~/.dbread/{config.yaml, .env, sample.db}
                             + auto-install Claude Code skill when ~/.claude
                             is detected
   dbread install-skill   -- install / reinstall ~/.claude/skills/dbread/SKILL.md
+  dbread add [name]      -- interactively add a new connection from a connection-string
+  dbread add-extra <e>   -- install additional driver extras (preserves prior)
+  dbread list-extras     -- show tracked vs importable extras
+  dbread doctor          -- check config.yaml dialects vs installed drivers
   dbread --version       -- print package version
   dbread --help          -- print short help
 """
@@ -16,6 +20,18 @@ import sqlite3
 import sys
 from importlib import resources
 from pathlib import Path
+
+from dbread.extras.installer import install_or_print
+from dbread.extras.manager import (
+    DIALECT_TO_EXTRA,
+    EXTRA_TO_MODULE,
+    bootstrap_state,
+    detect_install_method,
+    load_state,
+    merge_extras,
+    save_state,
+    scan_installed_extras,
+)
 
 
 def _home_dir() -> Path:
@@ -167,6 +183,123 @@ def init_config() -> int:
     return 0
 
 
+def cmd_add_extra(args: list[str]) -> int:
+    """`dbread add-extra <e1> [e2] ...` — install additional extras, preserving prior."""
+    if not args:
+        print("Usage: dbread add-extra <extra> [extra2 ...]")
+        print(f"Available extras: {', '.join(sorted(EXTRA_TO_MODULE))}")
+        return 2
+    unknown = [e for e in args if e not in EXTRA_TO_MODULE]
+    if unknown:
+        print(f"Unknown extras: {', '.join(unknown)}")
+        print(f"Available: {', '.join(sorted(EXTRA_TO_MODULE))}")
+        return 2
+    state = load_state() or bootstrap_state()
+    new_union = merge_extras(state.extras, args)
+    if new_union == state.extras:
+        print(f"OK  already installed: {', '.join(state.extras)}")
+        return 0
+    ok = install_or_print(new_union, state.installed_via)
+    if ok:
+        from datetime import UTC, datetime
+        state.extras = new_union
+        state.updated_at = datetime.now(UTC).isoformat()
+        save_state(state)
+        print(f"OK  extras now: {', '.join(new_union)}")
+        return 0
+    return 3
+
+
+def cmd_list_extras() -> int:
+    """`dbread list-extras` — table of tracked vs importable."""
+    state = load_state()
+    actually = set(scan_installed_extras())
+    tracked = set(state.extras) if state else set()
+    all_extras = sorted(set(EXTRA_TO_MODULE) | tracked)
+    install_method = state.installed_via if state else detect_install_method()
+    print(f"Install method: {install_method}")
+    state_status = "present" if state else "missing (will bootstrap on first add-extra)"
+    print(f"State file:     {state_status}")
+    print()
+    print(f"{'EXTRA':<12} {'TRACKED':<9} {'IMPORTABLE'}")
+    for e in all_extras:
+        t = "yes" if e in tracked else "no"
+        i = "yes" if e in actually else "no"
+        print(f"{e:<12} {t:<9} {i}")
+    return 0
+
+
+def cmd_doctor() -> int:
+    """`dbread doctor` — check config dialects vs installed drivers."""
+    cfg_path = os.environ.get("DBREAD_CONFIG")
+    if not cfg_path:
+        cfg_path = str(Path.home() / ".dbread" / "config.yaml")
+    if not Path(cfg_path).exists():
+        print(f"No config at {cfg_path}. Run `dbread init` first.")
+        return 3
+    try:
+        from dbread.config import Settings
+        cfg = Settings.load(cfg_path)
+    except Exception as e:  # noqa: BLE001 — surface config errors to user
+        print(f"Config invalid: {e}")
+        return 3
+    needed = {c.dialect for c in cfg.connections.values()}
+    extras_needed = {DIALECT_TO_EXTRA[d] for d in needed if d in DIALECT_TO_EXTRA}
+    have = set(scan_installed_extras())
+    missing = extras_needed - have
+    print(f"Config:    {cfg_path}")
+    print(f"Dialects:  {', '.join(sorted(needed))}")
+    print(f"Extras needed:    {', '.join(sorted(extras_needed)) or '(none)'}")
+    print(f"Extras installed: {', '.join(sorted(have))}")
+    if not missing:
+        print("OK  all dialects in config have drivers installed.")
+        return 0
+    print(f"\nMISSING extras: {', '.join(sorted(missing))}")
+    print("\nFix:")
+    print(f"  dbread add-extra {' '.join(sorted(missing))}")
+    print("  # or manually:")
+    print(f"  uv tool install --force \"dbread[{','.join(sorted(extras_needed))}]\"")
+    return 3
+
+
+def cmd_add(args: list[str]) -> int:
+    """`dbread add [name] [--from-stdin] [--no-test] [--manual] [--dialect-hint <x>]`"""
+    name = None
+    from_stdin = False
+    no_test = False
+    manual = False
+    dialect_hint = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--from-stdin":
+            from_stdin = True
+        elif a == "--no-test":
+            no_test = True
+        elif a == "--manual":
+            manual = True
+        elif a == "--dialect-hint":
+            i += 1
+            if i >= len(args):
+                print("--dialect-hint requires a value")
+                return 2
+            dialect_hint = args[i]
+        elif a.startswith("--"):
+            print(f"Unknown flag: {a}")
+            return 2
+        elif name is None:
+            name = a
+        else:
+            print(f"Unexpected positional arg: {a}")
+            return 2
+        i += 1
+    # Lazy import: avoid loading SQLAlchemy on every CLI invocation.
+    from dbread.connstr.wizard import run_add_wizard
+    return run_add_wizard(
+        name, from_stdin=from_stdin, no_test=no_test, dialect_hint=dialect_hint, manual=manual
+    )
+
+
 _HELP = """\
 dbread - read-only database MCP proxy for AI.
 
@@ -175,6 +308,12 @@ USAGE:
   dbread init                    scaffold ~/.dbread/ + install Claude Code skill
   dbread install-skill [--force] install / reinstall ~/.claude/skills/dbread/SKILL.md
   dbread audit [opts]            analyze audit.jsonl (--since, --conn, --slow, --rejected, --tail)
+  dbread add [name] [opts]       interactively add a new connection from a connection-string
+                                 opts: --from-stdin, --no-test, --manual,
+                                       --dialect-hint <pg|mysql|...>
+  dbread add-extra <e1> ...      install additional driver extras (preserves prior)
+  dbread list-extras             show tracked vs importable extras
+  dbread doctor                  check config.yaml dialects vs installed drivers
   dbread --version               print version
   dbread --help                  print this help
 """

@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.6.0"
+SERVER_VERSION = "0.7.0"
 
 
 def _tool_schemas() -> list[Tool]:
@@ -214,6 +214,18 @@ def main() -> None:
         if args[0] == "audit":
             from .audit_cli import main as audit_main
             sys.exit(audit_main(args[1:]))
+        if args[0] == "add":
+            from .cli import cmd_add
+            sys.exit(cmd_add(args[1:]))
+        if args[0] == "add-extra":
+            from .cli import cmd_add_extra
+            sys.exit(cmd_add_extra(args[1:]))
+        if args[0] == "list-extras":
+            from .cli import cmd_list_extras
+            sys.exit(cmd_list_extras())
+        if args[0] == "doctor":
+            from .cli import cmd_doctor
+            sys.exit(cmd_doctor())
         print(f"unknown argument: {args[0]}. Try `dbread --help`.", file=sys.stderr)
         sys.exit(2)
     asyncio.run(_run())

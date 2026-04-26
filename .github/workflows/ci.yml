@@ -106,3 +106,45 @@ jobs:
           MONGO_URL: mongodb://ai_ro:ro_pw@localhost:27019/dbread_test?authSource=dbread_test
           SKIP_DOCKER: "1"
         run: uv run pytest tests/integration/test_e2e_mongo.py -v
+
+  extras-install-order:
+    name: Verify dbread add-extra preserves prior extras
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Install dbread (postgres only)
+        run: uv tool install --force ".[postgres]"
+
+      - name: Verify postgres importable, mongo correctly absent
+        run: |
+          uv tool run --from dbread python -c "import psycopg2; print('postgres OK')"
+          uv tool run --from dbread python -c "
+          try:
+            import pymongo
+            raise SystemExit('FAIL: pymongo should not be installed yet')
+          except ModuleNotFoundError:
+            print('mongo correctly absent')
+          "
+
+      - name: Run dbread add-extra mongo (regression under test)
+        run: dbread add-extra mongo
+
+      - name: Verify BOTH postgres + mongo importable after add-extra
+        run: |
+          uv tool run --from dbread python -c "import psycopg2; import pymongo; print('both OK')"
+
+      - name: Verify state file tracks both extras
+        run: |
+          echo "--- installed_extras.json ---"
+          cat ~/.dbread/installed_extras.json 2>/dev/null || echo "(no state file found)"
+          grep -q '"postgres"' ~/.dbread/installed_extras.json
+          grep -q '"mongo"' ~/.dbread/installed_extras.json
+          echo "State file contains both extras: OK"
