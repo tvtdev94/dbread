@@ -147,6 +147,17 @@ dbread add <name>      # re-add the connection; wizard tests live before saving
 
 Or they can edit `~/.dbread/.env` directly — the variable name matches `<NAME>_URL` from `config.yaml`.
 
+### Upgrading dbread (v0.7.2+)
+
+```bash
+uv tool upgrade dbread       # upgrades the package
+```
+
+This skill (`~/.claude/skills/dbread/SKILL.md`) auto-refreshes on the **next**
+`dbread` invocation if the bundled version differs — no manual
+`dbread install-skill --force` needed. Tell the user to restart Claude Code
+afterwards so the new skill is loaded for the current session.
+
 ## Don't do
 
 - Don't call `query` before `describe_table` unless the user explicitly lists column names.
