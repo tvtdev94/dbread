@@ -1,7 +1,7 @@
 ---
 name: dbread
-description: Provides safe read-only access to the user's databases (PostgreSQL, MySQL, MSSQL, Oracle, SQLite, DuckDB, ClickHouse, MongoDB) via the dbread MCP server. All writes are blocked by a 5-layer guard; only SELECT / WITH / EXPLAIN / SHOW for SQL and find/count/distinct/aggregate for MongoDB succeed. Queries are automatically row-limited, rate-limited, and audited.
-when_to_use: The user asks to query a database, run SELECT or MongoDB commands, count or aggregate rows, inspect table schemas or indexes, explore an unfamiliar database, explain a query plan, or analyze the audit log.
+description: Provides safe read-only access to the user's databases (PostgreSQL, MySQL, MSSQL, Oracle, SQLite, DuckDB, ClickHouse, MongoDB) via the dbread MCP server. All writes are blocked by a 5-layer guard; only SELECT / WITH / EXPLAIN / SHOW for SQL and find/count/distinct/aggregate for MongoDB succeed. Queries are automatically row-limited, rate-limited, and audited. Also provides setup CLI helpers (`dbread add`, `dbread add-extra`, `dbread doctor`) for adding connections from any common connection-string format and managing driver extras.
+when_to_use: The user asks to query a database, run SELECT or MongoDB commands, count or aggregate rows, inspect table schemas or indexes, explore an unfamiliar database, explain a query plan, analyze the audit log, OR add a new database connection / install a missing driver / diagnose a dbread setup issue.
 ---
 
 # dbread — Read-only Database MCP
@@ -104,6 +104,23 @@ config.
 **User**: "Delete inactive users."
 **You**: Refuse. dbread blocks all writes. Suggest the user run that DELETE manually through a tool with write privileges — dbread explicitly does not support it for safety.
 
+## Setup helpers (when user wants to add / fix a connection)
+
+dbread ships with a small CLI for setup — surface these instead of asking the user to hand-edit YAML.
+
+| User says... | Tell them to run | What it does |
+|---|---|---|
+| "Add my postgres / mysql / etc. to dbread" | `dbread add` | Interactive wizard: paste any connection string (URI / JDBC / ADO.NET / ODBC / MongoDB Atlas / file path), auto-detects format, converts to SQLAlchemy URL, tests live, writes `.env` + `config.yaml`. |
+| "I have a `Server=...;Database=...;User Id=...;` string" / JDBC URL / etc. | `dbread add` and paste it | Same as above — handles all 6 format families. |
+| "Auto-detect doesn't recognise my string" | `dbread add --manual --dialect-hint <pg\|mysql\|mssql\|...>` | Skips detection; prompts for SQLAlchemy URL directly. Wizard also offers a fallback menu automatically when detection fails. |
+| "I want to install another DB driver" | `dbread add-extra <name>` (e.g. `mongo`, `mssql`) | Adds the extra without dropping previously-installed ones (bare `uv tool install dbread[mongo]` WOULD drop them). |
+| "Is my dbread setup OK?" / "Why is my connection failing?" | `dbread doctor` | Reads `config.yaml`, lists dialects, checks each driver is importable, prints exact fix command. |
+| "What drivers are installed?" | `dbread list-extras` | Table of tracked vs actually-importable extras + install method. |
+
+Recognised connection-string formats (all 8 dialects): native URI · JDBC · ADO.NET / C# / .NET · ODBC · `mongodb+srv://` (Atlas) · MotherDuck `md:` · file paths (`*.db`, `*.sqlite`, `*.duckdb`).
+
+Unsupported (wizard hard-fails with hint): `Trusted_Connection=yes` (Windows auth) · Oracle TNS descriptor `(DESCRIPTION=...)` · MSSQL named instance `HOST\SQLEXPRESS`.
+
 ## Troubleshooting
 
 ### Missing driver errors
@@ -118,6 +135,17 @@ dbread add-extra <name>  # install (e.g. add-extra mongo)
 
 `dbread add-extra` is safe to run multiple times — it preserves all previously-installed extras (a bare
 `uv tool install dbread[mongo]` would NOT preserve them).
+
+### Connection refused / wrong host / wrong creds
+
+The user's `.env` or `config.yaml` likely has stale values. Suggest:
+
+```bash
+dbread add <name>      # re-add the connection; wizard tests live before saving
+                       # if name already exists, wizard prompts to overwrite
+```
+
+Or they can edit `~/.dbread/.env` directly — the variable name matches `<NAME>_URL` from `config.yaml`.
 
 ## Don't do
 
