@@ -456,6 +456,11 @@ dbread list-extras
 > tool environment, dropping previously-installed extras. `dbread add-extra` tracks the union of all installed extras
 > and reinstalls correctly so you never lose drivers you already had.
 
+> 💡 **Skill auto-refresh (v0.7.2+):** `uv tool upgrade dbread` upgrades the package; the **next time** you run any
+> `dbread` command (e.g. `dbread doctor`, or Claude Code starts the MCP server), the bundled Claude skill at
+> `~/.claude/skills/dbread/SKILL.md` is silently refreshed if its content has changed. No manual
+> `dbread install-skill --force` needed. Restart Claude Code to pick up the new skill in your session.
+
 Working from a git checkout (source install)? Run `bash scripts/dev-install.sh` (or the `.ps1` variant) — see the
 [Development](#%EF%B8%8F-development) section.
 
