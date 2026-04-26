@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.7.1"
+SERVER_VERSION = "0.7.2"
 
 
 def _tool_schemas() -> list[Tool]:
@@ -197,6 +197,11 @@ async def _run() -> None:
 
 def main() -> None:
     args = sys.argv[1:]
+    # Info-only commands skip the skill auto-refresh (no side effects expected).
+    info_only = bool(args) and args[0] in {"-h", "--help", "help", "-V", "--version", "version"}
+    if not info_only:
+        from .cli import auto_refresh_skill
+        auto_refresh_skill()
     if args:
         if args[0] in {"-h", "--help", "help"}:
             from .cli import print_help

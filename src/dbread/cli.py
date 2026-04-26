@@ -107,6 +107,32 @@ def _bundled_skill_text() -> str:
     return resources.files("dbread.assets").joinpath("skill.md").read_text(encoding="utf-8")
 
 
+def auto_refresh_skill() -> None:
+    """Silently re-install the Claude Code skill when the bundled version
+    differs from what's on disk. Called on every `dbread` invocation so
+    `uv tool upgrade dbread` automatically refreshes the skill on next run.
+
+    Skips silently if Claude Code isn't installed, or if the skill file
+    doesn't exist (don't auto-create — user must run `dbread init` or
+    `dbread install-skill` explicitly the first time).
+    """
+    try:
+        target = _claude_skills_dir() / "dbread" / "SKILL.md"
+        if not target.exists():
+            return  # never auto-create; respect explicit opt-in
+        bundled = _bundled_skill_text()
+        if bundled == target.read_text(encoding="utf-8"):
+            return  # already up to date
+        target.write_text(bundled, encoding="utf-8")
+        print(
+            f"dbread: refreshed Claude Code skill at {target} "
+            "(bundled version updated)",
+            file=sys.stderr,
+        )
+    except Exception:  # noqa: BLE001 — never break CLI on skill refresh
+        pass
+
+
 def install_skill(*, force: bool = False, quiet: bool = False) -> int:
     """Install the Claude Code skill at ~/.claude/skills/dbread/SKILL.md.
 
