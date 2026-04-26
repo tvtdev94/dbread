@@ -232,8 +232,9 @@ def test_cmd_doctor_all_drivers_present_returns_0(
 
     monkeypatch.delenv("DBREAD_CONFIG", raising=False)
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
-    # Simulate postgres driver IS installed.
+    # Simulate postgres extra IS installed AND its driver imports successfully.
     monkeypatch.setattr("dbread.cli.scan_installed_extras", lambda: ["postgres"])
+    monkeypatch.setattr("importlib.import_module", lambda name: None)  # noqa: ARG005
     monkeypatch.setenv("TEST_DB_URL", "postgresql+psycopg2://user:pw@localhost/db")
 
     rc = cmd_doctor()
