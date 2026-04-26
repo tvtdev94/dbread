@@ -287,35 +287,14 @@ def _name_exists_in_config(name: str, cfg_path: Path) -> bool:
 
 
 def _test_connection(dialect: str, url: str) -> tuple[bool, str]:
-    """Attempt a live connection. Returns (ok, error_message)."""
-    try:
-        if dialect == "mongodb":
-            from pymongo import MongoClient  # noqa: PLC0415 — lazy, only if extra present
+    """Attempt a live connection. Returns (ok, error_message).
 
-            client = MongoClient(url, serverSelectionTimeoutMS=5000)
-            client.admin.command("ping")
-            client.close()
-        else:
-            from sqlalchemy import create_engine, text  # noqa: PLC0415
-
-            connect_args = _timeout_kwargs_for(dialect)
-            eng = create_engine(url, connect_args=connect_args)
-            with eng.connect() as conn:
-                conn.execute(text("SELECT 1"))
-            eng.dispose()
-        return True, ""
-    except Exception as exc:  # noqa: BLE001
-        return False, str(exc)[:200]
-
-
-def _timeout_kwargs_for(dialect: str) -> dict:
-    """Return best-effort 5-second connection timeout kwargs per dialect."""
-    mapping: dict[str, dict] = {
-        "postgres": {"connect_timeout": 5},
-        "mysql": {"connect_timeout": 5},
-        "mssql": {"timeout": 5},
-    }
-    return mapping.get(dialect, {})
+    Thin wrapper around dbread.connstr.health.test_connection — kept for
+    backward compatibility with wizard tests that mock this symbol.
+    """
+    from dbread.connstr.health import test_connection  # noqa: PLC0415
+    ok, err, _ms = test_connection(dialect, url, timeout_s=5)
+    return ok, err
 
 
 def _confirm(msg: str, default: bool = False) -> bool:

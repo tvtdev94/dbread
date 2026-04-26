@@ -186,7 +186,7 @@ def test_cmd_doctor_no_config_returns_3(
     monkeypatch.delenv("DBREAD_CONFIG", raising=False)
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
 
-    rc = cmd_doctor()
+    rc = cmd_doctor(["--quick"])
     assert rc == 3
     out = capsys.readouterr().out
     assert "No config" in out
@@ -211,7 +211,7 @@ def test_cmd_doctor_config_with_missing_extra_returns_3(
     # Provide the env var so config can parse url_env reference.
     monkeypatch.setenv("TEST_DB_URL", "postgresql+psycopg2://user:pw@localhost/db")
 
-    rc = cmd_doctor()
+    rc = cmd_doctor(["--quick"])
     assert rc == 3
     out = capsys.readouterr().out
     assert "MISSING" in out
@@ -237,7 +237,7 @@ def test_cmd_doctor_all_drivers_present_returns_0(
     monkeypatch.setattr("importlib.import_module", lambda name: None)  # noqa: ARG005
     monkeypatch.setenv("TEST_DB_URL", "postgresql+psycopg2://user:pw@localhost/db")
 
-    rc = cmd_doctor()
+    rc = cmd_doctor(["--quick"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "OK" in out
@@ -258,7 +258,7 @@ def test_cmd_doctor_sqlite_dialect_needs_no_extra(
     # No extras installed, but sqlite needs none.
     monkeypatch.setattr("dbread.cli.scan_installed_extras", lambda: [])
 
-    rc = cmd_doctor()
+    rc = cmd_doctor(["--quick"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "OK" in out
@@ -275,7 +275,7 @@ def test_cmd_doctor_uses_env_var_config_path(
     monkeypatch.setenv("DBREAD_CONFIG", str(cfg_file))
     monkeypatch.setattr("dbread.cli.scan_installed_extras", lambda: [])
 
-    rc = cmd_doctor()
+    rc = cmd_doctor(["--quick"])
     assert rc == 0
 
 

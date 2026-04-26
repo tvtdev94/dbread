@@ -255,14 +255,21 @@ def cmd_list_extras() -> int:
     return 0
 
 
-def cmd_doctor() -> int:
-    """`dbread doctor` — per-connection driver health check.
+def cmd_doctor(args: list[str] | None = None) -> int:
+    """`dbread doctor [--quick]` — health check with live connection tests.
 
-    Output is a one-glance table: each connection -> its dialect -> required
-    driver extra -> import status (ok / MISSING / BROKEN). Verdict + fix at
-    the bottom. Extras installed but unused by any connection are listed as
-    a Note (not a warning) so users understand they're harmless.
+    Default: runs SELECT 1 / Mongo ping against every configured connection
+    in parallel (5s timeout each, ~5s wall-clock for any number of conns).
+    `--quick` skips the live test (driver-import check only — fast).
+
+    Output:
+      - Summary: Health (HEALTHY/DEGRADED) + Connections count + Extras count
+      - Per-connection table: name, dialect, driver, CONNECT result
+      - Verdict: OK or FAIL with per-connection fix hints (smart per-error)
+      - Note: extras installed but unused (informational, harmless)
     """
+    args = args or []
+    quick = "--quick" in args
     cfg_path = os.environ.get("DBREAD_CONFIG")
     if not cfg_path:
         cfg_path = str(Path.home() / ".dbread" / "config.yaml")
@@ -270,70 +277,125 @@ def cmd_doctor() -> int:
         print(f"FAIL  No config file at {cfg_path}\n\nFix:\n  dbread init")
         return 3
 
-    print(f"Config: {cfg_path}\n")
-
     try:
         from dbread.config import Settings  # noqa: PLC0415
         cfg = Settings.load(cfg_path)
     except Exception as e:  # noqa: BLE001 — surface config errors to user
-        print(f"FAIL  Config invalid.\n\n  {e}\n\nFix:\n  Edit {cfg_path}")
+        print(f"Config: {cfg_path}\n\nFAIL  Config invalid.\n\n  {e}\n\n"
+              f"Fix:\n  Edit {cfg_path}")
         return 3
 
-    have = set(scan_installed_extras())
-    rows: list[tuple[str, str, str, str]] = []  # (conn, dialect, extra, status)
-    missing_extras: list[str] = []
-    broken: list[tuple[str, str]] = []  # (extra, error_first_line)
+    have = sorted(scan_installed_extras())
+    needed_extras = {DIALECT_TO_EXTRA[c.dialect] for c in cfg.connections.values()
+                     if c.dialect in DIALECT_TO_EXTRA}
+    unused_extras = sorted(set(have) - needed_extras)
 
-    import importlib  # noqa: PLC0415
+    # Build per-connection rows. CONNECT result determined by:
+    #   1. driver missing -> "MISSING driver" (skip live test)
+    #   2. --quick flag    -> "(skipped --quick)"
+    #   3. otherwise       -> live test in parallel, render "ok (47ms)" / "FAIL ..."
+    rows = _build_doctor_rows(cfg, set(have), quick=quick)
 
-    for name, conn in cfg.connections.items():
-        extra = DIALECT_TO_EXTRA.get(conn.dialect)
-        if extra is None:  # sqlite — stdlib, no extra needed
-            rows.append((name, conn.dialect, "-", "ok (stdlib)"))
-            continue
-        if extra not in have:
-            rows.append((name, conn.dialect, extra, "MISSING"))
-            missing_extras.append(extra)
-            continue
-        # Deep-import check: catches broken-wheel cases (e.g. pyodbc with
-        # missing system libodbc). find_spec succeeds, import_module raises.
-        try:
-            importlib.import_module(EXTRA_TO_MODULE[extra])
-            rows.append((name, conn.dialect, extra, "ok"))
-        except Exception as e:  # noqa: BLE001
-            err = str(e).splitlines()[0][:60]
-            rows.append((name, conn.dialect, extra, "BROKEN"))
-            broken.append((extra, err))
+    # Render summary
+    from collections import Counter  # noqa: PLC0415
+    dialect_counts = Counter(c.dialect for c in cfg.connections.values())
+    breakdown = ", ".join(f"{d}={n}" for d, n in sorted(dialect_counts.items()))
+    n_total = len(rows)
+    n_bad = sum(1 for r in rows if not r["ok"])
+    health = "HEALTHY" if n_bad == 0 else "DEGRADED"
 
-    print(f"{'CONNECTION':<16} {'DIALECT':<11} {'EXTRA':<10} STATUS")
+    print(f"Config: {cfg_path}\n")
+    print(f"Health:      {health}")
+    print(f"Connections: {n_total} ({breakdown})")
+    extras_summary = f"{len(have)} installed ({', '.join(have) or 'none'})"
+    if unused_extras:
+        extras_summary += f" | {len(unused_extras)} unused"
+    print(f"Extras:      {extras_summary}\n")
+
+    print(f"{'CONNECTION':<16} {'DIALECT':<11} {'DRIVER':<10} CONNECT")
     for r in rows:
-        print(f"{r[0]:<16} {r[1]:<11} {r[2]:<10} {r[3]}")
+        print(f"{r['name']:<16} {r['dialect']:<11} {r['driver']:<10} {r['connect']}")
     print()
 
-    needed_extras = {r[2] for r in rows if r[2] != "-"}
-    unused = sorted(have - needed_extras)
-    n_total = len(rows)
-    n_bad = sum(1 for r in rows if r[3] in ("MISSING", "BROKEN"))
-
     if n_bad == 0:
-        print(f"OK  {n_total} connection(s), all drivers present.")
-        if unused:
-            print(
-                f"\nNote: extra(s) installed but unused by any connection: "
-                f"{', '.join(unused)}"
-            )
+        print(f"OK  {n_total}/{n_total} connection(s) healthy.")
+        if unused_extras:
+            print(f"\nNote: extra(s) installed but unused: {', '.join(unused_extras)}")
             print("      Safe to ignore (kept for future use).")
         return 0
 
-    print(f"FAIL  {n_bad} of {n_total} connection(s) cannot connect.")
+    print(f"FAIL  {n_total - n_bad}/{n_total} healthy ({n_bad} failed).")
+
+    # Aggregate fix hints
+    from dbread.connstr.health import classify_error  # noqa: PLC0415
+    missing_extras = sorted({r["missing_extra"] for r in rows if r.get("missing_extra")})
     if missing_extras:
-        unique_missing = sorted(set(missing_extras))
-        print(f"\nFix:\n  dbread add-extra {' '.join(unique_missing)}")
-    if broken:
-        print("\nBroken drivers (installed but unloadable — likely missing system lib):")
-        for extra, err in broken:
-            print(f"  {extra}: {err}")
+        print(f"\nFix missing drivers:\n  dbread add-extra {' '.join(missing_extras)}")
+
+    bad_with_err = [r for r in rows if not r["ok"] and r.get("error")]
+    if bad_with_err:
+        print("\nIssues + fix hints:")
+        for r in bad_with_err:
+            print(f"\n  {r['name']} ({r['dialect']}):")
+            print(f"    Error: {r['error'][:120]}")
+            for line in classify_error(r["error"]):
+                print(f"    {line}")
     return 3
+
+
+def _build_doctor_rows(
+    cfg, installed_extras: set[str], *, quick: bool
+) -> list[dict]:
+    """Build per-connection result rows. Runs live tests in parallel unless quick."""
+    initial: list[dict] = []
+    testable: list[tuple[int, str, str, str]] = []  # (idx, name, dialect, url)
+
+    for name, conn in cfg.connections.items():
+        extra = DIALECT_TO_EXTRA.get(conn.dialect)
+        driver = "built-in" if extra is None else EXTRA_TO_MODULE.get(extra, extra)
+        row = {
+            "name": name, "dialect": conn.dialect, "driver": driver,
+            "connect": "", "ok": False, "error": "",
+        }
+
+        if extra is not None and extra not in installed_extras:
+            row["connect"] = "MISSING driver"
+            row["missing_extra"] = extra
+            initial.append(row)
+            continue
+        if quick:
+            row["connect"] = "ok (skipped)"
+            row["ok"] = True
+            initial.append(row)
+            continue
+        try:
+            url = conn.resolved_url()
+            initial.append(row)
+            testable.append((len(initial) - 1, name, conn.dialect, url))
+        except Exception as e:  # noqa: BLE001
+            row["connect"] = "URL error"
+            row["error"] = str(e)
+            initial.append(row)
+
+    if testable:
+        from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+
+        from dbread.connstr.health import test_connection  # noqa: PLC0415
+        with ThreadPoolExecutor(max_workers=min(8, len(testable))) as ex:
+            futs = {
+                ex.submit(test_connection, dialect, url, timeout_s=5): idx
+                for idx, _name, dialect, url in testable
+            }
+            for fut, idx in futs.items():
+                ok, err, ms = fut.result()
+                if ok:
+                    initial[idx]["connect"] = f"ok ({int(ms)}ms)"
+                    initial[idx]["ok"] = True
+                else:
+                    short = err.split("\n")[0][:40]
+                    initial[idx]["connect"] = f"FAIL ({short})"
+                    initial[idx]["error"] = err
+    return initial
 
 
 def cmd_add(args: list[str]) -> int:
@@ -387,7 +449,7 @@ USAGE:
                                        --dialect-hint <pg|mysql|...>
   dbread add-extra <e1> ...      install additional driver extras (preserves prior)
   dbread list-extras             show tracked vs importable extras
-  dbread doctor                  check config.yaml dialects vs installed drivers
+  dbread doctor [--quick]        live health check (SELECT 1 each connection); --quick skips test
   dbread --version               print version
   dbread --help                  print this help
 """
