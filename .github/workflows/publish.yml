@@ -88,9 +88,9 @@ jobs:
           name: dist
           path: dist/
 
-  # 3. Publish to PyPI via Trusted Publisher (OIDC).
-  # Requires the `pypi` environment in repo settings — gates the upload behind
-  # an approval click so a wrong tag push can't yeet to PyPI accidentally.
+  # 3. Publish to PyPI using the PYPI_API_TOKEN secret.
+  # Gated on the `pypi` environment which has tvtdev94 as a required reviewer —
+  # one-click approval prevents accidental tag pushes from yeeting to PyPI.
   publish:
     name: Publish to PyPI
     needs: build
@@ -98,8 +98,6 @@ jobs:
     environment:
       name: pypi
       url: https://pypi.org/p/dbread
-    permissions:
-      id-token: write   # mandatory for Trusted Publisher OIDC token exchange
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -109,3 +107,5 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
