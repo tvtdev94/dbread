@@ -1,6 +1,6 @@
 [project]
 name = "dbread"
-version = "0.7.8"
+version = "0.7.9"
 description = "Read-only database MCP proxy for AI — safe SELECT + MongoDB read access with 5-layer defense"
 readme = "README.md"
 requires-python = ">=3.11"

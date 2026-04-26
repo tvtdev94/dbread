@@ -114,7 +114,7 @@ dbread ships with a small CLI for setup — surface these instead of asking the 
 | "I have a `Server=...;Database=...;User Id=...;` string" / JDBC URL / etc. | `dbread add` and paste it | Same as above — handles all 6 format families. |
 | "Auto-detect doesn't recognise my string" | `dbread add --manual --dialect-hint <pg\|mysql\|mssql\|...>` | Skips detection; prompts for SQLAlchemy URL directly. Wizard also offers a fallback menu automatically when detection fails. |
 | "I want to install another DB driver" | `dbread add-extra <name>` (e.g. `mongo`, `mssql`) | Adds the extra without dropping previously-installed ones (bare `uv tool install dbread[mongo]` WOULD drop them). |
-| "Is my dbread setup OK?" / "Why is my connection failing?" | `dbread doctor` | Reads `config.yaml`, lists dialects, checks each driver is importable, prints exact fix command. |
+| "Is my dbread setup OK?" / "Why is my connection failing?" | `dbread doctor` | Per-connection table — checks driver is importable, **live-pings each DB** (5s timeout, in parallel), shows summary stats (`X/Y connected`), and prints smart fix hints based on the error pattern (refused / auth / DB missing / SSL / missing driver). Add `--quick` to skip live tests. Auto-loads `~/.dbread/.env` first. |
 | "What drivers are installed?" | `dbread list-extras` | Table of tracked vs actually-importable extras + install method. |
 
 Recognised connection-string formats (all 8 dialects): native URI · JDBC · ADO.NET / C# / .NET · ODBC · `mongodb+srv://` (Atlas) · MotherDuck `md:` · file paths (`*.db`, `*.sqlite`, `*.duckdb`).
