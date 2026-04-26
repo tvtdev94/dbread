@@ -256,35 +256,83 @@ def cmd_list_extras() -> int:
 
 
 def cmd_doctor() -> int:
-    """`dbread doctor` — check config dialects vs installed drivers."""
+    """`dbread doctor` — per-connection driver health check.
+
+    Output is a one-glance table: each connection -> its dialect -> required
+    driver extra -> import status (ok / MISSING / BROKEN). Verdict + fix at
+    the bottom. Extras installed but unused by any connection are listed as
+    a Note (not a warning) so users understand they're harmless.
+    """
     cfg_path = os.environ.get("DBREAD_CONFIG")
     if not cfg_path:
         cfg_path = str(Path.home() / ".dbread" / "config.yaml")
     if not Path(cfg_path).exists():
-        print(f"No config at {cfg_path}. Run `dbread init` first.")
+        print(f"FAIL  No config file at {cfg_path}\n\nFix:\n  dbread init")
         return 3
+
+    print(f"Config: {cfg_path}\n")
+
     try:
-        from dbread.config import Settings
+        from dbread.config import Settings  # noqa: PLC0415
         cfg = Settings.load(cfg_path)
     except Exception as e:  # noqa: BLE001 — surface config errors to user
-        print(f"Config invalid: {e}")
+        print(f"FAIL  Config invalid.\n\n  {e}\n\nFix:\n  Edit {cfg_path}")
         return 3
-    needed = {c.dialect for c in cfg.connections.values()}
-    extras_needed = {DIALECT_TO_EXTRA[d] for d in needed if d in DIALECT_TO_EXTRA}
+
     have = set(scan_installed_extras())
-    missing = extras_needed - have
-    print(f"Config:    {cfg_path}")
-    print(f"Dialects:  {', '.join(sorted(needed))}")
-    print(f"Extras needed:    {', '.join(sorted(extras_needed)) or '(none)'}")
-    print(f"Extras installed: {', '.join(sorted(have))}")
-    if not missing:
-        print("OK  all dialects in config have drivers installed.")
+    rows: list[tuple[str, str, str, str]] = []  # (conn, dialect, extra, status)
+    missing_extras: list[str] = []
+    broken: list[tuple[str, str]] = []  # (extra, error_first_line)
+
+    import importlib  # noqa: PLC0415
+
+    for name, conn in cfg.connections.items():
+        extra = DIALECT_TO_EXTRA.get(conn.dialect)
+        if extra is None:  # sqlite — stdlib, no extra needed
+            rows.append((name, conn.dialect, "-", "ok (stdlib)"))
+            continue
+        if extra not in have:
+            rows.append((name, conn.dialect, extra, "MISSING"))
+            missing_extras.append(extra)
+            continue
+        # Deep-import check: catches broken-wheel cases (e.g. pyodbc with
+        # missing system libodbc). find_spec succeeds, import_module raises.
+        try:
+            importlib.import_module(EXTRA_TO_MODULE[extra])
+            rows.append((name, conn.dialect, extra, "ok"))
+        except Exception as e:  # noqa: BLE001
+            err = str(e).splitlines()[0][:60]
+            rows.append((name, conn.dialect, extra, "BROKEN"))
+            broken.append((extra, err))
+
+    print(f"{'CONNECTION':<16} {'DIALECT':<11} {'EXTRA':<10} STATUS")
+    for r in rows:
+        print(f"{r[0]:<16} {r[1]:<11} {r[2]:<10} {r[3]}")
+    print()
+
+    needed_extras = {r[2] for r in rows if r[2] != "-"}
+    unused = sorted(have - needed_extras)
+    n_total = len(rows)
+    n_bad = sum(1 for r in rows if r[3] in ("MISSING", "BROKEN"))
+
+    if n_bad == 0:
+        print(f"OK  {n_total} connection(s), all drivers present.")
+        if unused:
+            print(
+                f"\nNote: extra(s) installed but unused by any connection: "
+                f"{', '.join(unused)}"
+            )
+            print("      Safe to ignore (kept for future use).")
         return 0
-    print(f"\nMISSING extras: {', '.join(sorted(missing))}")
-    print("\nFix:")
-    print(f"  dbread add-extra {' '.join(sorted(missing))}")
-    print("  # or manually:")
-    print(f"  uv tool install --force \"dbread[{','.join(sorted(extras_needed))}]\"")
+
+    print(f"FAIL  {n_bad} of {n_total} connection(s) cannot connect.")
+    if missing_extras:
+        unique_missing = sorted(set(missing_extras))
+        print(f"\nFix:\n  dbread add-extra {' '.join(unique_missing)}")
+    if broken:
+        print("\nBroken drivers (installed but unloadable — likely missing system lib):")
+        for extra, err in broken:
+            print(f"  {extra}: {err}")
     return 3
 
 
