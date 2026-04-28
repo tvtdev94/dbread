@@ -363,6 +363,135 @@ Slow queries (>= 5000 ms):
 
 ---
 
+## dbread query <connection> [opts] "<sql>" — One-shot query
+
+Run a query end-to-end through the SAME guard / cost-guard / rate-limit / audit
+pipeline as the MCP server path. Convenient for testing config without going
+through Claude Code.
+
+### Usage
+
+```bash
+dbread query <connection> [opts] "<sql>"
+dbread query <connection> [opts] --command '<json>'   # mongodb dialect
+```
+
+### Options
+
+| Flag | Effect |
+|------|--------|
+| `--explain` | Return the query plan instead of running the query |
+| `--command <json>` | Mongo command spec (mongodb dialect only) |
+| `--max-rows <int>` | Override server `max_rows` for this call (cannot exceed configured cap) |
+| `--format <fmt>` | Force output: `table` / `json` / `csv` (default: auto — TTY = table, pipe = json) |
+
+### Output
+
+- **Auto-detect:** `sys.stdout.isatty()` → ASCII table (with `─`/`│` separators + row footer); pipe → one JSON object per line (jq-friendly)
+- **`--format csv`:** RFC-4180 quoted CSV via stdlib `csv.writer` (LF line endings for Unix-pipeline friendliness)
+- **`--format table`:** ASCII table; cells > 50 chars truncated with `…`
+- **`--format json`:** JSON Lines (one row per line)
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | OK |
+| `2` | Guard reject (`sql_guard:`, `mongo_guard:`, or `cost_guard_error:`) **or** invalid CLI args |
+| `3` | Rate limit exceeded |
+| `4` | Connection error / config not found / unknown connection |
+
+### Examples
+
+```bash
+# Pretty table in terminal
+dbread query sample "SELECT * FROM greetings"
+
+# JSONL pipe to jq
+dbread query sample "SELECT id, text FROM greetings" | jq -s 'length'
+
+# CSV export
+dbread query sample --format csv "SELECT * FROM greetings" > out.csv
+
+# Mongo command
+dbread query analytics_mongo --command '{"find": "users", "limit": 10}'
+
+# Plan only
+dbread query sample --explain "SELECT * FROM greetings"
+
+# Override row cap (must be <= server max_rows)
+dbread query sample --max-rows 5 "SELECT * FROM greetings"
+```
+
+### Notes
+
+- **No `--no-audit` flag.** Bypassing the audit log defeats dbread's value proposition; not negotiable.
+- **Cost guard applies** when `max_rows_estimate` is set in `config.yaml` for the target connection — same as MCP path.
+- **Lazy-imports** SQLAlchemy so `dbread --help` stays fast.
+
+---
+
+## dbread upgrade [--check] [--force-windows] — Upgrade preserving extras
+
+Wraps `uv tool install --reinstall "dbread[<tracked-extras>]"` so driver
+extras you added via `dbread add-extra` survive the upgrade (which a plain
+`uv tool upgrade dbread` would silently drop).
+
+### Usage
+
+```bash
+dbread upgrade [--check] [--force-windows]
+```
+
+### Options
+
+| Flag | Effect |
+|------|--------|
+| `--check` | Dry-run: prints `current` vs `latest` PyPI version, no install |
+| `--force-windows` | Skip the Windows tasklist pre-check (use only when you know no other dbread.exe is running) |
+
+### Behaviour
+
+1. **Pre-check (Windows only):** runs `tasklist /FI "IMAGENAME eq dbread.exe"`. If MORE THAN ONE `dbread.exe` row appears (the calling process is always one), aborts with exit 1 — Windows file-lock would corrupt the install. The same calling instance is excluded automatically.
+2. **State load:** reads `~/.dbread/installed_extras.json`. If absent, bootstraps from currently importable drivers and **prints a warning** (a previously-installed but currently broken driver will silently drop out).
+3. **Install-method gate:** if `installed_via != "uv-tool"` (i.e. pip / pipx / unknown), prints the appropriate manual command and exits 0.
+4. **Reinstall:** runs `uv tool install --reinstall "dbread[<sorted,deduped extras>]"` with live stdout streaming.
+5. **Verify:** spawns a fresh `python -c "..."` to read the post-install version (avoids stale-module bugs from in-process re-import after self-upgrade).
+6. **Success message** with version diff + extras list + restart hint.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success / `--check` printed / pip-fallback printed |
+| `1` | Aborted by Windows pre-check (other `dbread.exe` running) |
+| `2` | Invalid CLI args |
+| `4` | uv install failed (uv's own non-zero return clamped to 4 to avoid colliding with our codes) |
+
+### Examples
+
+```bash
+# Standard upgrade
+dbread upgrade
+
+# Check what would change
+dbread upgrade --check
+# Output:
+#   current: 0.8.0
+#   latest:  0.8.1  (upgrade available)
+
+# Skip Windows safety check (advanced)
+dbread upgrade --force-windows
+```
+
+### Notes
+
+- **Stdlib only:** uses `urllib.request` (PyPI fetch, 10s timeout, fail-soft) + `subprocess` + `importlib.metadata`. No new runtime deps.
+- **PyPI URL hardcoded** to `https://pypi.org/pypi/dbread/json`. Private-index users will see "could not reach pypi.org" on `--check` — manual upgrade still works.
+- **Manual fallback** for non-uv-tool installs: branches by detected method — `pip install --upgrade "dbread[...]"` for pip, `pipx upgrade dbread` + `pipx inject` for pipx, or the universal `uv tool install --reinstall` for unknown.
+
+---
+
 ## dbread --version — Print version
 
 Shows the installed dbread version.
@@ -376,7 +505,7 @@ dbread --version
 ### Example output
 
 ```
-dbread 0.7.0
+dbread 0.8.0
 ```
 
 ### Exit codes
@@ -404,11 +533,14 @@ USAGE:
   dbread init                    scaffold ~/.dbread/ + install Claude Code skill
   dbread install-skill [--force] install / reinstall ~/.claude/skills/dbread/SKILL.md
   dbread audit [opts]            analyze audit.jsonl (--since, --conn, --slow, --rejected, --tail)
+  dbread query <conn> "<sql>"    one-shot query (TTY=table, pipe=JSONL; --format csv|table)
+  dbread upgrade [--check]       upgrade dbread preserving tracked extras (--check = dry-run)
   dbread add [name] [opts]       interactively add a new connection from a connection-string
-                                 opts: --from-stdin, --no-test, --dialect-hint <pg|mysql|...>
+                                 opts: --from-stdin, --no-test, --manual,
+                                       --dialect-hint <pg|mysql|...>
   dbread add-extra <e1> ...      install additional driver extras (preserves prior)
   dbread list-extras             show tracked vs importable extras
-  dbread doctor                  check config.yaml dialects vs installed drivers
+  dbread doctor [--quick]        live health check (SELECT 1 each connection); --quick skips test
   dbread --version               print version
   dbread --help                  print this help
 ```

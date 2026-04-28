@@ -21,6 +21,18 @@ def build_install_args(extras: list[str]) -> list[str]:
     return ["uv", "tool", "install", "--force", specifier]
 
 
+def build_reinstall_args(extras: list[str]) -> list[str]:
+    """Return argv for ``uv tool install --reinstall`` (forces fresh PyPI fetch).
+
+    Behaviour parallels :func:`build_install_args` but uses ``--reinstall`` so
+    uv re-resolves and pulls the newest matching version, even when the cached
+    package satisfies the requirement.
+    """
+    unique_sorted = sorted(set(extras))
+    specifier = f"dbread[{','.join(unique_sorted)}]" if unique_sorted else "dbread"
+    return ["uv", "tool", "install", "--reinstall", specifier]
+
+
 def run_install(
     extras: list[str],
     *,

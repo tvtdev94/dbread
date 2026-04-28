@@ -10,7 +10,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-1.0+-6e56cf?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io/)
 [![CI](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml/badge.svg)](https://github.com/tvtdev94/dbread/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-539%20passing-22c55e)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-622%20passing-22c55e)](#-testing)
 [![Coverage](https://img.shields.io/badge/coverage-87%25-0891b2)](#-testing)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-de5fe9)](https://docs.astral.sh/uv/)
 [![License MIT](https://img.shields.io/badge/license-MIT-94a3b8)](LICENSE)
@@ -106,6 +106,7 @@ connections:
     rate_limit_per_min: 60
     statement_timeout_s: 30
     max_rows: 1000
+    # max_rows_estimate: 100000   # opt-in Layer 2.5 — reject if EXPLAIN > N rows (postgres/mysql/mssql/oracle/duckdb/mongodb)
 
   # Optional: MongoDB (requires `uv tool install "dbread[mongo]"`)
   # analytics_mongo:
@@ -255,6 +256,8 @@ dbread is also a CLI for setup, troubleshooting, and audit analysis.
 | `dbread list-extras` | Show tracked vs actually-importable extras |
 | `dbread doctor` | Per-connection health table — driver check + **live ping** (5s, parallel) + summary stats + smart fix hints. Use `--quick` to skip live tests. |
 | `dbread audit [opts]` | Analyze `audit.jsonl` (`--since`, `--conn`, `--slow`, `--rejected`, `--tail`) |
+| `dbread query <conn> "<sql>"` | One-shot query — TTY → ASCII table, pipe → JSONL, `--format csv` for export. `--explain`, `--max-rows`, `--command '<json>'` (Mongo). Same guard/audit pipeline as MCP path. |
+| `dbread upgrade [--check]` | Reinstall via `uv tool install --reinstall` preserving tracked extras. Windows pre-check + `--force-windows` override + `--check` dry-run (compares vs PyPI latest). |
 | `dbread install-skill [--force]` | Install/refresh the Claude Code skill |
 | `dbread --version` / `--help` | Self-explanatory |
 
@@ -269,6 +272,7 @@ Full reference: [`docs/cli-reference.md`](docs/cli-reference.md).
 | **0** | DB user with `GRANT SELECT` only | **All writes — mandatory, non-bypassable** |
 | **1** | `sqlglot` AST validation (SQL) · allowlist validator (Mongo) | **SQL:** `INSERT` · `UPDATE` · `DELETE` · `MERGE` · `CREATE` · `ALTER` · `DROP` · `TRUNCATE` · `GRANT` · `REVOKE` · multi-statement (`SELECT 1; DROP...`) · **PG CTE-DML trick** (`WITH d AS (DELETE...) SELECT...`) · time-based DoS (`pg_sleep*`, `sleep`, `benchmark`, MSSQL `WAITFOR DELAY/TIME`) · function blacklist (`pg_read_file`, `xp_cmdshell`, `load_file`, `dblink_exec`, ClickHouse `url`/`s3`/`remote`, DuckDB `read_csv`/`read_parquet`, …). **Mongo:** only `find`/`count`/`distinct`/`aggregate`; blocks `$out` · `$merge` · `$function` · `$accumulator` · `$where` · `mapReduce` · `$unionWith` · cross-DB `$lookup` · recursively walks `$facet`/`$lookup.pipeline`. |
 | **2** | Rate limit + `statement_timeout` | Runaway loops · long-running queries |
+| **2.5** | Pre-exec cost guard — `EXPLAIN`-based row estimate (postgres / mysql / mssql / oracle / duckdb / mongodb; opt-in via `max_rows_estimate`) | Queries the planner estimates will return / scan more than `max_rows_estimate` rows |
 | **3** | Auto-inject `LIMIT N` | Oversized result sets |
 | **4** | JSONL audit log (`fsync` each write, 3-backup rotate, opt-in PII redact) | *(detection, not prevention — grep-friendly forensics)* |
 
@@ -405,7 +409,7 @@ Compat (no new dialect): CockroachDB, TimescaleDB, Aurora PG (use `postgres`) ·
 
 ```bash
 uv sync --extra dev
-uv run pytest                          # 539 passing
+uv run pytest                          # 622 passing
 uv run pytest --cov=dbread             # coverage report (87% overall)
 uv run ruff check src/                 # lint
 
@@ -414,7 +418,7 @@ cd tests/integration && docker compose up -d
 uv run pytest tests/integration/ -v
 ```
 
-- **520+ unit tests** cover config, connections, audit (fsync/tz/redact/rotate), SQL guard (**57 evasion cases incl. WAITFOR & sleep variants**), Mongo guard (**22 adversarial cases — $out/$merge smuggling, JS exec, cross-DB $lookup, deep nesting**), rate limiter, tools, **plus the v0.7 connection-string parsers** (84 tests across 6 format families × 8 dialects), **converter** (54 tests), **wizard + writers** (47 tests), **extras tracking** (36 tests), **CLI** (22 tests).
+- **600+ unit tests** cover config, connections, audit (fsync/tz/redact/rotate), SQL guard (**57 evasion cases incl. WAITFOR & sleep variants**), Mongo guard (**22 adversarial cases — $out/$merge smuggling, JS exec, cross-DB $lookup, deep nesting**), rate limiter, tools, **the v0.8 cost guard** (41 tests across 6 dialects + Mongo + integration), **`dbread query` CLI** (18 tests), **`dbread upgrade` CLI** (24 tests), **plus the v0.7 connection-string parsers** (84 tests across 6 format families × 8 dialects), **converter** (54 tests), **wizard + writers** (47 tests), **extras tracking** (36 tests), **CLI** (22 tests).
 - **4 subprocess smoke tests** drive `server.py` via real stdio JSON-RPC.
 - **4 SQLite + 4 DuckDB E2E tests** always run (no Docker).
 - **PG + MySQL + ClickHouse + MongoDB E2E tests** skip gracefully without Docker.
