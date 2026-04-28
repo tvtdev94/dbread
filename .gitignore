@@ -33,3 +33,4 @@ plans/
 dist/
 audit.jsonl
 sample.db
+release_artifacts/

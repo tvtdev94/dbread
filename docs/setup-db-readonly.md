@@ -369,3 +369,68 @@ mongodb+srv://ai_readonly:password@cluster0.abc.mongodb.net/analytics?retryWrite
 - [ ] Long query (`SELECT pg_sleep(60)` etc) times out at the configured threshold
 - [ ] Side-effect functions where applicable (`pg_read_file`, `xp_cmdshell`) → permission denied
 - [ ] The credential is in `.env` (referenced via `url_env`) — never hardcoded in `config.yaml`
+
+---
+
+## Optional: Layer 2.5 Pre-Exec Cost Guard Grants
+
+When `max_rows_estimate` is set in `config.yaml`, dbread runs `EXPLAIN`-class
+calls **before** executing the query. Most dialects need no extra permission;
+two require explicit grants. Missing perms → cost guard **fails open** (the
+query proceeds — Layers 1/2/3 still cover).
+
+### PostgreSQL — no extra grant
+`EXPLAIN (FORMAT JSON)` is allowed for any role with `SELECT` on the queried tables. ✓
+
+### MySQL — no extra grant
+`EXPLAIN FORMAT=JSON` works with the `SELECT` privilege already granted. ✓
+
+### Microsoft SQL Server — `SHOWPLAN` permission
+
+```sql
+GRANT SHOWPLAN TO ai_readonly;
+```
+
+Without it, `SET SHOWPLAN_XML ON` is denied → cost guard fails open. dbread
+auto-invalidates the SQL connection if `SET SHOWPLAN_XML OFF` later fails
+(prevents pool poisoning that would return XML on the next checkout).
+
+### Oracle — INSERT + SELECT + DELETE on `PLAN_TABLE`
+
+`EXPLAIN PLAN FOR <sql>` writes one row per plan node into `PLAN_TABLE`:
+
+```sql
+GRANT INSERT, SELECT, DELETE ON sys.plan_table$ TO ai_readonly;
+-- DELETE so dbread can clean up its own per-call STATEMENT_ID rows.
+```
+
+dbread namespaces every plan with a per-call `STATEMENT_ID = 'dbread_<16hex>'`
+(generated via `secrets.token_hex`) and DELETEs the rows in a `finally` block,
+so multiple concurrent dbread instances sharing PLAN_TABLE never read each
+other's plans.
+
+### DuckDB — no extra grant
+`EXPLAIN <sql>` runs with read-only access. ✓
+
+### MongoDB — `dbAdmin` (or `clusterMonitor`) for `collStats`
+
+`db.command("explain", …, verbosity: "queryPlanner")` works with the `read`
+role alone. The cost guard additionally calls `db.command("collStats", <coll>)`
+on COLLSCAN-detected plans — that requires the **`dbAdmin`** role on the
+target database (or `clusterMonitor` cluster-wide):
+
+```js
+// In the target DB:
+db.grantRolesToUser("ai_readonly", ["dbAdmin"])
+```
+
+Without it, `collStats` returns `not authorized` → cost guard fails open and
+the query proceeds. All-IXSCAN plans skip the `collStats` call entirely (no
+extra grant needed if you only ever query indexed columns).
+
+### SQLite + ClickHouse — unsupported in v0.8.0
+
+These dialects are intentionally not registered in the cost-guard parser.
+`cost_check_ms` is recorded as `0` in the audit row, and the query proceeds
+through Layers 2/3/4. Future versions may add ClickHouse `EXPLAIN ESTIMATE`
+support.

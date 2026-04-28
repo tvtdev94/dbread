@@ -32,7 +32,16 @@ class ConnectionConfig(BaseModel):
     rate_limit_per_min: int = 60
     statement_timeout_s: int = 30
     max_rows: int = 1000
+    # Opt-in pre-exec cost guard. None disables the EXPLAIN-based check (BC default).
+    max_rows_estimate: int | None = None
     mongo: MongoConfig | None = None
+
+    @field_validator("max_rows_estimate")
+    @classmethod
+    def _check_max_rows_estimate(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError("max_rows_estimate must be > 0 if set")
+        return v
 
     @model_validator(mode="after")
     def _check_url(self) -> ConnectionConfig:

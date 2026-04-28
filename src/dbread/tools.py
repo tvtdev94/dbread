@@ -11,6 +11,7 @@ from sqlalchemy import text
 from .audit import AuditLogger
 from .config import Settings
 from .connections import ConnectionManager
+from .cost_guard import CostGuard
 from .rate_limiter import RateLimiter
 from .sql_guard import SqlGuard
 
@@ -30,6 +31,7 @@ class ToolHandlers:
         guard: SqlGuard,
         rate_limiter: RateLimiter,
         audit: AuditLogger,
+        cost_guard: CostGuard | None = None,
         mongo: MongoToolHandlers | None = None,
     ) -> None:
         self.settings = settings
@@ -37,6 +39,7 @@ class ToolHandlers:
         self.guard = guard
         self.rl = rate_limiter
         self.audit = audit
+        self.cost_guard = cost_guard or CostGuard()
         self.mongo = mongo
 
     def list_connections(self) -> list[dict[str, str]]:
@@ -118,13 +121,34 @@ class ToolHandlers:
         )
         sql_to_run = self.guard.inject_limit(sql, cfg.dialect, effective)
 
+        engine = self.cm.get_engine(connection)
+        cost_ms: int | None = None
+        if cfg.max_rows_estimate is not None:
+            # EXPLAIN raw `sql` (not `sql_to_run`) so the planner reports the
+            # un-LIMIT'd cost — otherwise injected LIMIT would mask full scans.
+            rows_est, cost_ms = self.cost_guard.check(
+                sql, cfg.dialect, engine, cfg.max_rows_estimate
+            )
+            if rows_est is not None and rows_est > cfg.max_rows_estimate:
+                reason = (
+                    f"cost_guard_error: rows_estimate={rows_est} "
+                    f"exceeds {cfg.max_rows_estimate}"
+                )
+                self.audit.log(
+                    connection, sql, "rejected", reason=reason,
+                    dialect=cfg.dialect, cost_check_ms=cost_ms,
+                )
+                raise ToolError(reason)
+
         granted, scope = self.rl.acquire_with_reason(connection)
         if not granted:
             reason = f"rate_limit_{scope}" if scope else "rate_limit"
-            self.audit.log(connection, sql, "rejected", reason=reason, dialect=cfg.dialect)
+            self.audit.log(
+                connection, sql, "rejected", reason=reason,
+                dialect=cfg.dialect, cost_check_ms=cost_ms,
+            )
             raise ToolError(f"rate_limit_exceeded: {scope}" if scope else "rate_limit_exceeded")
 
-        engine = self.cm.get_engine(connection)
         t0 = time.perf_counter()
         try:
             with engine.connect() as conn:
@@ -134,12 +158,16 @@ class ToolHandlers:
         except Exception as e:
             ms = int((time.perf_counter() - t0) * 1000)
             self.audit.log(
-                connection, sql_to_run, "failed", ms=ms, reason=str(e)[:200], dialect=cfg.dialect
+                connection, sql_to_run, "failed", ms=ms, reason=str(e)[:200],
+                dialect=cfg.dialect, cost_check_ms=cost_ms,
             )
             raise ToolError(f"db_error: {e}") from e
 
         ms = int((time.perf_counter() - t0) * 1000)
-        self.audit.log(connection, sql_to_run, "ok", rows=len(rows), ms=ms, dialect=cfg.dialect)
+        self.audit.log(
+            connection, sql_to_run, "ok", rows=len(rows), ms=ms,
+            dialect=cfg.dialect, cost_check_ms=cost_ms,
+        )
         return {
             "columns": columns,
             "rows": rows,

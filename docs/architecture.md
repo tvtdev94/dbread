@@ -59,6 +59,7 @@ dbread is a single-process Python MCP server that proxies **read-only** SQL quer
 | 0 | DB user with `GRANT SELECT` only | Any write; privileged ops |
 | 1 | sqlglot AST validation | DML / DDL / DCL, multi-statement, CTE-DML, side-effect functions |
 | 2 | Rate limiter + DB `statement_timeout` | Runaway loops; long queries |
+| 2.5 | Pre-exec cost guard — `EXPLAIN` row estimate (postgres / mysql / mssql / oracle / duckdb / mongodb; opt-in `max_rows_estimate`) | Queries the planner estimates exceed the row threshold; sqlite/clickhouse fail-open |
 | 3 | Auto-inject `LIMIT N` | Oversized result sets |
 | 4 | Audit JSONL log | *(detection, not prevention)* |
 
@@ -72,9 +73,10 @@ dbread is a single-process Python MCP server that proxies **read-only** SQL quer
 2. tools.query():
    a. guard.validate(sql, dialect)       # Layer 1 — may reject
    b. sql = guard.inject_limit(sql)      # Layer 3
-   c. rate_limiter.acquire(connection)   # Layer 2a — may reject
-   d. engine.execute(sql)                # hits Layer 2b (DB-side timeout) + Layer 0 (RO user)
-   e. audit.log(...)                     # Layer 4
+   c. cost_guard.check(sql, dialect, …)  # Layer 2.5 — may reject (only if max_rows_estimate set)
+   d. rate_limiter.acquire(connection)   # Layer 2a — may reject
+   e. engine.execute(sql)                # hits Layer 2b (DB-side timeout) + Layer 0 (RO user)
+   f. audit.log(... cost_check_ms=…)     # Layer 4 (cost_check_ms recorded only when guard ran)
 
 3. Return rows JSON to MCP client.
 ```

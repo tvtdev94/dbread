@@ -452,6 +452,8 @@ USAGE:
   dbread init                    scaffold ~/.dbread/ + install Claude Code skill
   dbread install-skill [--force] install / reinstall ~/.claude/skills/dbread/SKILL.md
   dbread audit [opts]            analyze audit.jsonl (--since, --conn, --slow, --rejected, --tail)
+  dbread query <conn> "<sql>"    one-shot query (TTY=table, pipe=JSONL; --format csv|table)
+  dbread upgrade [--check]       upgrade dbread preserving tracked extras (--check = dry-run)
   dbread add [name] [opts]       interactively add a new connection from a connection-string
                                  opts: --from-stdin, --no-test, --manual,
                                        --dialect-hint <pg|mysql|...>

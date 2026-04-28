@@ -137,6 +137,7 @@ class AuditLogger:
         ms: int = 0,
         reason: str | None = None,
         dialect: str | None = None,
+        cost_check_ms: int | None = None,
     ) -> None:
         logged_sql = self._redact(sql, dialect) if self.redact_literals else sql
         record: dict[str, object] = {
@@ -149,6 +150,8 @@ class AuditLogger:
         }
         if reason:
             record["reason"] = reason
+        if cost_check_ms is not None:
+            record["cost_check_ms"] = cost_check_ms
         line = json.dumps(record, ensure_ascii=False) + "\n"
         with self._lock:
             self._maybe_rotate()

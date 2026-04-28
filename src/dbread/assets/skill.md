@@ -66,6 +66,7 @@ Never mix: if dialect is `mongodb`, do not send `sql`. If SQL dialect, do not se
 | `rate_limit_exceeded: per_conn` | Too many queries on this connection this minute | Wait ~60s, then retry. Consolidate queries if possible. |
 | `rate_limit_exceeded: global` | Total QPM across all connections hit | Wait and retry; reduce query fan-out. |
 | `db_error: ... timeout ...` | Query exceeded `statement_timeout_s` | Add WHERE filters, LIMIT, or specific columns. Run `explain` first. |
+| `cost_guard_error: rows_estimate=N exceeds <threshold>` (SQL) or `cost_guard_error: docs_estimate=N exceeds <threshold>` (Mongo) | Pre-exec EXPLAIN says the query would scan/return more rows than the user's `max_rows_estimate` cap (Layer 2.5; postgres / mysql / mssql / oracle / duckdb / mongodb when configured) | **Do NOT retry.** Suggest narrower WHERE filters, an indexed column, or aggregation (`COUNT(*)` instead of full SELECT). If the user genuinely needs the data, they must raise `max_rows_estimate` in `config.yaml` themselves. |
 | `truncated: true` in response | Result hit `max_rows` cap | Warn user that results are partial; suggest narrower WHERE or pagination. |
 
 ## Refusing writes
@@ -116,6 +117,8 @@ dbread ships with a small CLI for setup — surface these instead of asking the 
 | "I want to install another DB driver" | `dbread add-extra <name>` (e.g. `mongo`, `mssql`) | Adds the extra without dropping previously-installed ones (bare `uv tool install dbread[mongo]` WOULD drop them). |
 | "Is my dbread setup OK?" / "Why is my connection failing?" | `dbread doctor` | Per-connection table — checks driver is importable, **live-pings each DB** (5s timeout, in parallel), shows summary stats (`X/Y connected`), and prints smart fix hints based on the error pattern (refused / auth / DB missing / SSL / missing driver). Add `--quick` to skip live tests. Auto-loads `~/.dbread/.env` first. |
 | "What drivers are installed?" | `dbread list-extras` | Table of tracked vs actually-importable extras + install method. |
+| "Test a query without going through Claude" | `dbread query <conn> "SELECT ..."` | One-shot run with the SAME guard / cost-guard / rate-limit / audit pipeline. TTY → ASCII table; pipe → JSONL (`\| jq`); `--format csv` for export; `--explain` for plan only. Exit codes: `0` ok, `2` guard reject, `3` rate limit, `4` connection error. |
+| "Upgrade dbread without losing my drivers" | `dbread upgrade` (or `dbread upgrade --check` for dry-run) | Reinstalls preserving tracked extras (`uv tool upgrade dbread` would drop them). Auto-detects Windows file-lock conflict; `--force-windows` to bypass; `--check` prints current vs PyPI latest without installing. |
 
 Recognised connection-string formats (all 8 dialects): native URI · JDBC · ADO.NET / C# / .NET · ODBC · `mongodb+srv://` (Atlas) · MotherDuck `md:` · file paths (`*.db`, `*.sqlite`, `*.duckdb`).
 
@@ -147,11 +150,18 @@ dbread add <name>      # re-add the connection; wizard tests live before saving
 
 Or they can edit `~/.dbread/.env` directly — the variable name matches `<NAME>_URL` from `config.yaml`.
 
-### Upgrading dbread (v0.7.2+)
+### Upgrading dbread (v0.8.0+)
 
 ```bash
-uv tool upgrade dbread       # upgrades the package
+dbread upgrade               # preserves tracked extras + Windows pre-check
+dbread upgrade --check       # dry-run: print current vs latest PyPI version
 ```
+
+`dbread upgrade` wraps `uv tool install --reinstall "dbread[<tracked extras>]"`
+so the drivers you added with `dbread add-extra` survive the upgrade (a plain
+`uv tool upgrade dbread` would drop them). On Windows it pre-checks
+`tasklist` for OTHER running `dbread.exe` instances and aborts (file-lock
+risk) — use `--force-windows` to bypass.
 
 This skill (`~/.claude/skills/dbread/SKILL.md`) auto-refreshes on the **next**
 `dbread` invocation if the bundled version differs — no manual
@@ -160,14 +170,13 @@ afterwards so the new skill is loaded for the current session.
 
 ### Upgrade fails on Windows: `os error 32` / "being used by another process"
 
-This is the file-lock error users hit when running `uv tool upgrade dbread` on
-Windows while Claude Code is open — `dbread.exe` is locked by the running MCP
-server. Tell them to:
+If `dbread upgrade` aborts with `dbread.exe is running`, another instance
+(usually the Claude Code MCP server) holds the file open. Tell the user:
 
 ```powershell
 # Quit Claude Code completely (not just minimize), then:
 Get-Process dbread -ErrorAction SilentlyContinue | Stop-Process -Force
-uv tool upgrade dbread
+dbread upgrade
 # Then reopen Claude Code.
 ```
 

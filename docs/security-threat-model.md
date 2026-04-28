@@ -29,7 +29,7 @@ Single-process MCP server on a developer workstation. Client = Claude Code (trus
 | **I**nformation disclosure: audit record lost on crash | Power loss / `kill -9` mid-write | Layer 4: `fsync()` after every record | Low |
 | **I**nformation disclosure: credentials plaintext on wire | URL without TLS | Warn on `get_engine` if `sslmode=`/`ssl=`/`encrypt=` absent (PG/MySQL/MSSQL) | Medium — documented |
 | **I**nformation disclosure: sensitive tables readable | Over-broad GRANT SELECT | Docs: grant minimum tables/schemas | User-config dependent |
-| **D**enial of Service: runaway query | AI loops large queries | Layer 2 rate limit + DB `statement_timeout` + LIMIT injection | Low |
+| **D**enial of Service: runaway query | AI loops large queries | Layer 2.5 pre-exec EXPLAIN cost guard (postgres / mysql / mssql / oracle / duckdb / mongodb, opt-in `max_rows_estimate`) + Layer 2 rate limit + DB `statement_timeout` + LIMIT injection | Low |
 | **D**enial of Service: audit fills disk | Unbounded log | Layer 4 rotation at 50 MB (1 backup = 100 MB cap) | Low |
 | **E**levation: side-effect function (`pg_read_file`, `xp_cmdshell`) | SELECT wrapping dangerous function | Layer 1 function blacklist + Layer 0 (no EXECUTE on superuser fns) | Low |
 | **D**enial of Service: time-based (`pg_sleep`, `dbms_lock.sleep`, `WAITFOR DELAY`) | Long-sleeping SELECT | Layer 1 blacklist (function + `WAITFOR` regex) + Layer 2 timeout | Low |

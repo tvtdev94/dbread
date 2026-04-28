@@ -7,6 +7,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from .client import MongoClientManager
+from .cost_guard import MongoCostGuard
 from .guard import MongoGuard
 from .schema import docs_to_rows, infer_schema
 
@@ -31,12 +32,14 @@ class MongoToolHandlers:
         rate_limiter: RateLimiter,
         audit: AuditLogger,
         guard: MongoGuard | None = None,
+        cost_guard: MongoCostGuard | None = None,
     ) -> None:
         self.conn_mgr = conn_mgr
         self.mc = mongo_mgr
         self.rl = rate_limiter
         self.audit = audit
         self.guard = guard or MongoGuard()
+        self.cost_guard = cost_guard or MongoCostGuard()
 
     # --- schema introspection ---------------------------------------------
 
@@ -83,25 +86,43 @@ class MongoToolHandlers:
 
         cmd = self.guard.inject_limit(cmd, cap)
 
+        db = self.mc.get_db(connection)
+        cost_ms: int | None = None
+        if cfg.max_rows_estimate is not None:
+            # Use the original command (pre-limit) so the planner reports true
+            # collection-scan cost — injected limits would mask full scans.
+            docs_est, cost_ms = self.cost_guard.estimate_docs(
+                db, command, cfg.max_rows_estimate
+            )
+            if docs_est is not None and docs_est > cfg.max_rows_estimate:
+                reason = (
+                    f"cost_guard_error: docs_estimate={docs_est} "
+                    f"exceeds {cfg.max_rows_estimate}"
+                )
+                self._audit(connection, cmd, "rejected", reason=reason, cost_check_ms=cost_ms)
+                _raise_tool_error(reason)
+
         granted, scope = self.rl.acquire_with_reason(connection)
         if not granted:
             reason = f"rate_limit_{scope}" if scope else "rate_limit"
-            self._audit(connection, cmd, "rejected", reason=reason)
+            self._audit(connection, cmd, "rejected", reason=reason, cost_check_ms=cost_ms)
             _raise_tool_error(
                 f"rate_limit_exceeded: {scope}" if scope else "rate_limit_exceeded"
             )
 
-        db = self.mc.get_db(connection)
         t0 = time.perf_counter()
         try:
             rows, columns = self._execute(db, cmd, cap)
         except Exception as e:
             ms = int((time.perf_counter() - t0) * 1000)
-            self._audit(connection, cmd, "failed", ms=ms, reason=str(e)[:200])
+            self._audit(
+                connection, cmd, "failed", ms=ms, reason=str(e)[:200],
+                cost_check_ms=cost_ms,
+            )
             _raise_tool_error(f"db_error: {e}")
 
         ms = int((time.perf_counter() - t0) * 1000)
-        self._audit(connection, cmd, "ok", rows=len(rows), ms=ms)
+        self._audit(connection, cmd, "ok", rows=len(rows), ms=ms, cost_check_ms=cost_ms)
         return {
             "columns": columns,
             "rows": rows,
@@ -183,6 +204,7 @@ class MongoToolHandlers:
     def _audit(
         self, connection: str, cmd: dict, status: str, *,
         rows: int = 0, ms: int = 0, reason: str | None = None,
+        cost_check_ms: int | None = None,
     ) -> None:
         to_log = cmd
         if getattr(self.audit, "redact_literals", False):
@@ -192,4 +214,5 @@ class MongoToolHandlers:
             connection,
             json.dumps(to_log, default=str, ensure_ascii=False),
             status, rows=rows, ms=ms, reason=reason, dialect="mongodb",
+            cost_check_ms=cost_check_ms,
         )

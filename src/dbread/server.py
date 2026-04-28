@@ -18,6 +18,7 @@ from mcp.types import TextContent, Tool
 from .audit import AuditLogger
 from .config import Settings
 from .connections import ConnectionManager
+from .cost_guard import CostGuard
 from .rate_limiter import RateLimiter
 from .sql_guard import SqlGuard
 from .tools import ToolError, ToolHandlers
@@ -26,7 +27,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.7.9"
+SERVER_VERSION = "0.8.0"
 
 
 def _tool_schemas() -> list[Tool]:
@@ -129,6 +130,7 @@ async def _run() -> None:
     mongo_handlers = None
     if has_mongo:
         from .mongo.client import MongoClientManager
+        from .mongo.cost_guard import MongoCostGuard
         from .mongo.tools import MongoToolHandlers
 
         mongo_mgr = MongoClientManager(settings)
@@ -137,6 +139,7 @@ async def _run() -> None:
             mongo_mgr=mongo_mgr,
             rate_limiter=rate_limiter,
             audit=audit,
+            cost_guard=MongoCostGuard(),
         )
 
     handlers = ToolHandlers(
@@ -145,6 +148,7 @@ async def _run() -> None:
         guard=SqlGuard(),
         rate_limiter=rate_limiter,
         audit=audit,
+        cost_guard=CostGuard(),
         mongo=mongo_handlers,
     )
 
@@ -219,6 +223,12 @@ def main() -> None:
         if args[0] == "audit":
             from .audit_cli import main as audit_main
             sys.exit(audit_main(args[1:]))
+        if args[0] == "query":
+            from .query_cli import main as query_main
+            sys.exit(query_main(args[1:]))
+        if args[0] == "upgrade":
+            from .upgrade_cli import main as upgrade_main
+            sys.exit(upgrade_main(args[1:]))
         if args[0] == "add":
             from .cli import cmd_add
             sys.exit(cmd_add(args[1:]))
