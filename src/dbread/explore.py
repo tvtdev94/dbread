@@ -41,6 +41,13 @@ ORDERABLE_TYPES = tuple(t for t in COMPARABLE_TYPES if t is not sqltypes.Boolean
 # analytics table would otherwise build a query with hundreds of them.
 MAX_PROFILE_COLUMNS = 64
 
+# Rows a profile reads when the caller does not say. The ceiling matters more
+# than the default: a profile returns one row, so `max_rows` cannot bound it
+# and an unclamped sample size is the only thing standing between an agent
+# and a full-table scan.
+DEFAULT_SAMPLE_SIZE = 5_000
+MAX_SAMPLE_SIZE = 100_000
+
 # Column names that usually carry row recency, most specific first.
 _RECENCY_NAMES = (
     "created_at", "createdat", "created", "inserted_at",

@@ -115,7 +115,18 @@ def profile_docs(sample: list[dict], requested: list[str] | None = None) -> list
             if value is not None:
                 present[path].append(value)
 
-    paths = sorted(types_by_path) if requested is None else requested
+    if requested is None:
+        paths = sorted(types_by_path)
+    else:
+        # Reporting an unrecognised field as 100% null would answer a typo
+        # with a confident, wrong data-quality verdict.
+        missing = [p for p in requested if p not in types_by_path]
+        if missing:
+            raise ValueError(
+                f"field not present in the sample: {missing[0]}"
+                " (Mongo is schemaless; a rare field may need a larger sample_size)"
+            )
+        paths = requested
     fields: list[dict] = []
     for path in paths:
         values = present.get(path, [])

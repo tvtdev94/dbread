@@ -1,4 +1,4 @@
-"""MCP server entry point - stdio transport, registers 5 tools."""
+"""MCP server entry point - stdio transport, registers 8 tools."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.9.1"
+SERVER_VERSION = "0.9.2"
 
 
 def _tool_schemas() -> list[Tool]:
@@ -100,7 +100,15 @@ def _tool_schemas() -> list[Tool]:
                         "description": "Subset to profile; omit for all columns",
                     },
                     "schema": {"type": "string"},
-                    "sample_size": {"type": "integer", "minimum": 1, "default": 5000},
+                    "sample_size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": (
+                            "Rows/documents to read. Omit to use the backend "
+                            "default (MongoDB: the connection's "
+                            "mongo.sample_size). Clamped server-side."
+                        ),
+                    },
                 },
                 "required": ["connection", "table"],
             },

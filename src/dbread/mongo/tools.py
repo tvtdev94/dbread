@@ -137,6 +137,9 @@ class MongoToolHandlers:
         sample_size: int | None = None,
     ) -> dict[str, Any]:
         cfg = self.conn_mgr.get_config(connection)
+        # The connection's configured sample size is the default; $sample
+        # switches to a blocking in-memory sort once it reaches 5% of the
+        # collection, so asking for more than configured is not free.
         default = cfg.mongo.sample_size if cfg.mongo else 100
         size = sample_size if sample_size and sample_size > 0 else default
         # Routed through `query` so the sample draw is guarded, rate-limited
@@ -147,11 +150,16 @@ class MongoToolHandlers:
             max_rows=size,
         )
         docs = [dict(zip(out["columns"], row, strict=False)) for row in out["rows"]]
+        try:
+            fields = profile_docs(docs, columns)
+        except ValueError as e:
+            _raise_tool_error(f"invalid_input: {e}")
         return {
             "table": table,
             "sampled_rows": len(docs),
+            "sample_size": size,
             "source": "sampled",
-            "fields": profile_docs(docs, columns),
+            "fields": fields,
         }
 
     # --- query + explain ---------------------------------------------------

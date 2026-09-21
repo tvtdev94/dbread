@@ -282,6 +282,31 @@ def test_profile_table_rejects_unknown_column(tmp_path: Path) -> None:
         h.profile_table("test", "users", columns=["nope"])
 
 
+def test_sample_table_clamps_n(tmp_path: Path) -> None:
+    """The declared inputSchema is not enforced by the MCP SDK."""
+    h, _ = _build_handlers(tmp_path, max_rows=2)
+    assert h.sample_table("test", "users", n=-5)["row_count"] == 1  # floored
+    assert h.sample_table("test", "users", n=10**9)["row_count"] == 2  # capped
+
+
+def test_profile_table_clamps_sample_size(tmp_path: Path) -> None:
+    """profile_table returns one row, so max_rows cannot bound its scan."""
+    from dbread.explore import MAX_SAMPLE_SIZE
+
+    h, _ = _build_handlers(tmp_path)
+    assert h.profile_table("test", "users", sample_size=10**9)["sample_size"] == (
+        MAX_SAMPLE_SIZE
+    )
+    assert h.profile_table("test", "users", sample_size=-1)["sample_size"] == 1
+
+
+def test_profile_table_default_sample_size(tmp_path: Path) -> None:
+    from dbread.explore import DEFAULT_SAMPLE_SIZE
+
+    h, _ = _build_handlers(tmp_path)
+    assert h.profile_table("test", "users")["sample_size"] == DEFAULT_SAMPLE_SIZE
+
+
 def test_sample_table_unknown_table(tmp_path: Path) -> None:
     h, _ = _build_handlers(tmp_path)
     with pytest.raises(ToolError, match="unknown_table"):

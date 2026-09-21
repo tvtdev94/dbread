@@ -259,6 +259,29 @@ def test_profile_table(mongo_url: str, tmp_path: pathlib.Path) -> None:
         mgr.close_all()
 
 
+def test_profile_table_uses_configured_sample_size(
+    mongo_url: str, tmp_path: pathlib.Path
+) -> None:
+    """The SQL-side default must not shadow mongo.sample_size."""
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        assert handlers.profile_table("m", "users")["sample_size"] == 100
+    finally:
+        mgr.close_all()
+
+
+def test_profile_table_rejects_unknown_field(
+    mongo_url: str, tmp_path: pathlib.Path
+) -> None:
+    """A typo must not come back as a confident '100% null' verdict."""
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        with pytest.raises(ToolError, match="invalid_input"):
+            handlers.profile_table("m", "users", columns=["no_such_field"])
+    finally:
+        mgr.close_all()
+
+
 def test_list_schemas_returns_pinned_database(
     mongo_url: str, tmp_path: pathlib.Path
 ) -> None:

@@ -252,10 +252,13 @@ class ToolHandlers:
     ) -> dict[str, Any]:
         """Most recent rows, ordered by the best recency column available."""
         cfg = self.cm.get_config(connection)
+        # The declared inputSchema is advertising — the MCP SDK does not
+        # enforce it — so every caller-supplied bound is clamped here.
+        rows = _clamp(n, 1, cfg.max_rows)
         if cfg.dialect == "mongodb":
             self._require_mongo()
             out = self.mongo.query(
-                connection, {"find": table, "sort": {"_id": -1}, "limit": n}, n
+                connection, {"find": table, "sort": {"_id": -1}, "limit": rows}, rows
             )
             out["ordered_by"] = "_id"
             return out
@@ -264,7 +267,9 @@ class ToolHandlers:
         target = self._reflect(engine, table, schema)
         order_by = explore.recency_column(target)
         out = self.query(
-            connection, sql=explore.sample_sql(engine, target, n, order_by), max_rows=n
+            connection,
+            sql=explore.sample_sql(engine, target, rows, order_by),
+            max_rows=rows,
         )
         out["ordered_by"] = order_by
         return out
@@ -275,20 +280,30 @@ class ToolHandlers:
         table: str,
         columns: list[str] | None = None,
         schema: str | None = None,
-        sample_size: int = 5000,
+        sample_size: int | None = None,
     ) -> dict[str, Any]:
-        """Null rate, distinct count and range per column, over a sample."""
+        """Null rate, distinct count and range per column, over a sample.
+
+        `sample_size` is left unset by default so each backend can apply its
+        own: MongoDB honours the connection's `mongo.sample_size`, SQL uses
+        its own default. This tool returns a single row, so `max_rows` never
+        bounds it — the sample size is the only limit on how much the server
+        reads, which is why it is clamped rather than trusted.
+        """
         cfg = self.cm.get_config(connection)
         if cfg.dialect == "mongodb":
             self._require_mongo()
             return self.mongo.profile_table(connection, table, columns, sample_size)
 
+        size = _clamp(
+            sample_size if sample_size is not None else explore.DEFAULT_SAMPLE_SIZE,
+            1,
+            explore.MAX_SAMPLE_SIZE,
+        )
         engine = self.cm.get_engine(connection)
         target = self._reflect(engine, table, schema)
         try:
-            sql, plans, total_label = explore.profile_sql(
-                engine, target, columns, sample_size
-            )
+            sql, plans, total_label = explore.profile_sql(engine, target, columns, size)
         except ValueError as e:
             raise ToolError(f"invalid_input: {e}") from e
 
@@ -300,7 +315,7 @@ class ToolHandlers:
         return {
             "table": table,
             "sampled_rows": sampled,
-            "sample_size": sample_size,
+            "sample_size": size,
             "source": "sampled",
             "fields": fields,
         }
@@ -363,6 +378,10 @@ class ToolHandlers:
     def _require_mongo(self) -> None:
         if self.mongo is None:
             raise ToolError("mongo_not_configured")
+
+
+def _clamp(value: int, low: int, high: int) -> int:
+    return max(low, min(int(value), high))
 
 
 def _as_text(value: Any) -> str | None:
