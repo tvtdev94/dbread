@@ -202,18 +202,3 @@ def test_install_skill_subcommand_via_cli(fake_home: Path) -> None:
     )
     assert proc.returncode == 0
     assert (fake_home / ".claude" / "skills" / "dbread" / "SKILL.md").is_file()
-
-
-def test_install_skill_force_subcommand_via_cli(fake_home: Path) -> None:
-    (fake_home / ".claude").mkdir()
-    target = fake_home / ".claude" / "skills" / "dbread" / "SKILL.md"
-    target.parent.mkdir(parents=True)
-    target.write_text("STALE-SUBPROC", encoding="utf-8")
-    proc = subprocess.run(
-        [sys.executable, "-m", "dbread.server", "install-skill", "--force"],
-        capture_output=True, text=True, timeout=15,
-        env={**os.environ, "HOME": str(fake_home), "USERPROFILE": str(fake_home)},
-    )
-    assert proc.returncode == 0
-    assert target.read_text(encoding="utf-8") != "STALE-SUBPROC"
-    assert "name: dbread" in target.read_text(encoding="utf-8")

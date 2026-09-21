@@ -50,10 +50,18 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 class Server:
     def __init__(self, config_path: Path) -> None:
+        # Server start refreshes the Claude Code skill, so point HOME at the
+        # test's own directory. Without this the suite would rewrite the
+        # developer's real ~/.claude/skills/dbread/SKILL.md.
+        fake_home = config_path.parent / "home"
+        (fake_home / ".claude").mkdir(parents=True, exist_ok=True)
+        self.home = fake_home
         env = {
             **os.environ,
             "DBREAD_CONFIG": str(config_path),
             "PYTHONUNBUFFERED": "1",
+            "HOME": str(fake_home),
+            "USERPROFILE": str(fake_home),
             # Enable subprocess coverage so server.py is measured.
             # The coverage .pth file picks this up on interpreter start.
             "COVERAGE_PROCESS_START": str(_PROJECT_ROOT / "pyproject.toml"),
@@ -162,7 +170,22 @@ def test_list_tools(server: Server) -> None:
     _do_initialize(server)
     resp = server.send("tools/list")
     names = {t["name"] for t in resp["result"]["tools"]}
-    assert names == {"list_connections", "list_tables", "describe_table", "query", "explain"}
+    assert names == {
+        "list_connections", "list_tables", "list_schemas", "describe_table",
+        "query", "explain", "sample_table", "profile_table",
+    }
+
+
+def test_skill_refresh_never_touches_the_real_home(server: Server) -> None:
+    """`auto_refresh_skill` runs on every invocation, this one included.
+
+    The fixture points HOME at a temp dir so a test run cannot rewrite the
+    developer's own ~/.claude/skills/dbread/SKILL.md.
+    """
+    _do_initialize(server)
+    assert server.home != Path.home()
+    # Reaching this point also proves the refresh printed nothing: every
+    # response above was parsed off the same stdout that carries JSON-RPC.
 
 
 def test_call_list_connections(server: Server) -> None:

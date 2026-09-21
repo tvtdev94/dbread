@@ -332,6 +332,30 @@ roles: [
 ]
 ```
 
+### Optional: allow `$indexStats`
+
+The plain `read` role covers everything dbread needs except `$indexStats`,
+which answers "is this index ever actually used". Without the grant the stage
+fails loudly with `not authorized` — nothing breaks, you just cannot ask that
+question. To enable it, add a role carrying the `indexStats` action:
+
+```js
+use analytics
+db.createRole({
+  role: "readIndexStats",
+  privileges: [{
+    resource: { db: "analytics", collection: "" },
+    actions: ["indexStats"]
+  }],
+  roles: []
+})
+db.grantRolesToUser("ai_readonly", ["readIndexStats"])
+```
+
+`indexStats` is a read-only counter; it exposes no document data. The built-in
+`clusterMonitor` role also includes it, but grants considerably more besides —
+prefer the narrow custom role above.
+
 ### Connection URI
 
 Self-hosted / replica set:

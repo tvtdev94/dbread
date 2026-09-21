@@ -33,7 +33,7 @@ COMPOSE = HERE / "docker-compose.yml"
 
 PG_URL = "postgresql+psycopg2://ai_readonly:ropw@localhost:54329/testdb"
 MYSQL_URL = "mysql+pymysql://ai_readonly:ropw@localhost:33069/testdb"
-CLICKHOUSE_URL = "clickhouse+http://ai_readonly:ropw@localhost:81239/testdb"
+CLICKHOUSE_URL = "clickhouse+http://ai_readonly:ropw@localhost:18123/testdb"
 MONGO_URL = os.environ.get(
     "MONGO_URL",
     "mongodb://ai_ro:ro_pw@localhost:27019/dbread_test?authSource=dbread_test",

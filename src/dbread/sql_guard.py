@@ -40,13 +40,14 @@ _REVOKE = getattr(exp, "Revoke", None)
 if _REVOKE is not None:
     REJECT_NODES = REJECT_NODES + (_REVOKE,)
 
+# `USE` is deliberately absent: it switches the active database, which would
+# let a query escape the scope the connection was configured for.
 ALLOW_TOP_LEVEL: tuple[type[exp.Expression], ...] = (
     exp.Select,
     exp.Union,
     exp.Describe,
     exp.Show,
     exp.With,
-    exp.Use,
 )
 
 ALLOW_COMMAND_NAMES = {"EXPLAIN", "DESCRIBE", "DESC", "ANALYZE"}
@@ -123,6 +124,11 @@ class SqlGuard:
         for node in root.walk():
             if isinstance(node, REJECT_NODES):
                 return GuardResult(False, f"node_rejected: {type(node).__name__}")
+            # FOR UPDATE / FOR SHARE read rows but take writer locks, which can
+            # stall other sessions. PostgreSQL refuses them in a read-only
+            # transaction; not every dialect does, so reject them here too.
+            if isinstance(node, exp.Select) and node.args.get("locks"):
+                return GuardResult(False, "row_lock_not_allowed")
             if isinstance(node, exp.Command) and node is not root:
                 return GuardResult(
                     False, f"nested_command_rejected: {node.name}"
@@ -155,13 +161,37 @@ class SqlGuard:
         if len(stmts) != 1 or stmts[0] is None:
             return sql
         root = stmts[0]
-        self._apply_limit(root, max_rows)
+        if not self._apply_limit(root, max_rows):
+            # Nothing needed changing, so hand back the caller's own text
+            # rather than a re-serialized equivalent. Keeps sqlglot's
+            # rendering out of the path of every already-bounded query.
+            return sql
         return root.sql(dialect=dialect)
 
-    def _apply_limit(self, root: exp.Expression, max_rows: int) -> None:
-        if isinstance(root, exp.Select | exp.Union) and not root.args.get("limit"):
-            root.limit(max_rows, copy=False)
-        elif isinstance(root, exp.With):
+    def _apply_limit(self, root: exp.Expression, max_rows: int) -> bool:
+        """Bound the row count. Returns True when the tree was modified."""
+        if isinstance(root, exp.Select | exp.Union):
+            return _clamp_limit(root, max_rows)
+        if isinstance(root, exp.With):
             inner = root.this
-            if isinstance(inner, exp.Select) and not inner.args.get("limit"):
-                inner.limit(max_rows, copy=False)
+            if isinstance(inner, exp.Select):
+                return _clamp_limit(inner, max_rows)
+        return False
+
+
+def _clamp_limit(node: exp.Expression, max_rows: int) -> bool:
+    """Add a LIMIT, or lower one that exceeds the cap. True when changed.
+
+    A caller-supplied `LIMIT 5000000` used to pass through untouched, so the
+    database still scanned and shipped every row and only the final fetch
+    truncated. Clamping keeps the work bounded at the server.
+    """
+    limit = node.args.get("limit")
+    if limit is None:
+        node.limit(max_rows, copy=False)
+        return True
+    value = limit.expression
+    if isinstance(value, exp.Literal) and value.is_int and int(value.this) > max_rows:
+        node.limit(max_rows, copy=False)
+        return True
+    return False

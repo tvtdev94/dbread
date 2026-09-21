@@ -55,8 +55,8 @@ def test_list_describe_query_chain(sqlite_handlers, tmp_path: Path) -> None:
     conns = sqlite_handlers.list_connections()
     assert conns == [{"name": "t", "dialect": "sqlite"}]
 
-    tables = sqlite_handlers.list_tables("t")
-    assert {"users", "orders"}.issubset(set(tables))
+    tables = {row["name"] for row in sqlite_handlers.list_tables("t")}
+    assert {"users", "orders"}.issubset(tables)
 
     info = sqlite_handlers.describe_table("t", "users")
     assert [c["name"] for c in info["columns"]] == ["id", "name"]

@@ -16,18 +16,52 @@ ALLOWED_COMMANDS = frozenset({
     "distinct", "aggregate",
 })
 
+# Per-command top-level field allowlist. Anything outside these sets is
+# rejected rather than silently ignored: the executor honors exactly these
+# keys, and `tests/test_mongo_guard.py` pins the two sets equal so a field
+# added here without executor support fails the suite instead of quietly
+# dropping the caller's intent.
+COMMAND_FIELDS: dict[str, frozenset[str]] = {
+    "find": frozenset({
+        "find", "filter", "projection", "sort", "skip", "limit",
+        "hint", "collation", "batchSize", "comment", "maxTimeMS",
+    }),
+    "aggregate": frozenset({
+        "aggregate", "pipeline", "collation", "let", "hint",
+        "allowDiskUse", "comment", "maxTimeMS",
+    }),
+    "count": frozenset({
+        "count", "filter", "skip", "limit", "hint", "collation",
+        "comment", "maxTimeMS",
+    }),
+    "countDocuments": frozenset({
+        "countDocuments", "filter", "skip", "limit", "hint", "collation",
+        "comment", "maxTimeMS",
+    }),
+    "estimatedDocumentCount": frozenset({
+        "estimatedDocumentCount", "comment", "maxTimeMS",
+    }),
+    "distinct": frozenset({
+        "distinct", "key", "filter", "collation", "comment", "maxTimeMS",
+    }),
+}
+
 ALLOWED_STAGES = frozenset({
     "$match", "$project", "$group", "$sort", "$limit", "$skip",
     "$count", "$facet", "$bucket", "$bucketAuto", "$unwind",
-    "$addFields", "$set", "$replaceRoot", "$replaceWith",
+    "$addFields", "$set", "$unset", "$replaceRoot", "$replaceWith",
     "$sortByCount", "$densify", "$fill", "$lookup",
-    "$redact", "$sample", "$graphLookup",
+    "$redact", "$sample", "$graphLookup", "$setWindowFields",
+    "$geoNear", "$unionWith",
+    # Metadata reads. $collStats works under the plain `read` role;
+    # $indexStats additionally needs the `indexStats` action, and says so
+    # loudly when the role lacks it — see docs/setup-db-readonly.md.
+    "$collStats", "$indexStats",
 })
 
 BLOCKED_STAGES = frozenset({
     "$out", "$merge",
     "$function", "$accumulator",
-    "$unionWith",
 })
 
 BLOCKED_OPERATORS_ANYWHERE = frozenset({
@@ -57,6 +91,14 @@ class MongoGuard:
         if name not in ALLOWED_COMMANDS:
             return GuardResult(False, f"command_not_allowed: {name}")
 
+        unknown = set(cmd) - COMMAND_FIELDS[name]
+        if unknown:
+            return GuardResult(False, f"field_not_allowed: {sorted(unknown)[0]}")
+
+        res = _check_field_types(cmd)
+        if not res.allowed:
+            return res
+
         # Scan entire command for JS-exec / write operators at any depth.
         blocked = _find_blocked_operator(cmd)
         if blocked is not None:
@@ -69,11 +111,6 @@ class MongoGuard:
             res = _validate_pipeline(pipeline, depth=0)
             if not res.allowed:
                 return res
-
-        if name == "find":
-            flt = cmd.get("filter", {})
-            if not isinstance(flt, dict):
-                return GuardResult(False, "find_filter_must_be_dict")
 
         return _ALLOW
 
@@ -97,6 +134,31 @@ class MongoGuard:
                 pipeline.append({"$limit": cap})
             out["pipeline"] = pipeline
         return out
+
+
+_DICT_FIELDS = ("filter", "projection", "sort", "collation", "let")
+_NON_NEGATIVE_INT_FIELDS = ("skip", "limit", "batchSize")
+
+
+def _check_field_types(cmd: dict) -> GuardResult:
+    """Cheap shape checks so bad input fails here with a clear reason.
+
+    Deliberately shallow: semantic validation (unknown index for `hint`,
+    nonsense sort direction) belongs to the server, not to a second query
+    planner living in the guard.
+    """
+    for field in _DICT_FIELDS:
+        if field in cmd and not isinstance(cmd[field], dict):
+            return GuardResult(False, f"{field}_must_be_dict")
+    for field in _NON_NEGATIVE_INT_FIELDS:
+        if field not in cmd:
+            continue
+        value = cmd[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return GuardResult(False, f"{field}_must_be_non_negative_int")
+    if "key" in cmd and not isinstance(cmd["key"], str):
+        return GuardResult(False, "key_must_be_string")
+    return _ALLOW
 
 
 def _validate_pipeline(stages: list, depth: int) -> GuardResult:
@@ -124,6 +186,21 @@ def _validate_pipeline(stages: list, depth: int) -> GuardResult:
             if isinstance(from_val, str) and "." in from_val:
                 return GuardResult(False, "lookup_cross_db_blocked")
             sub_pipe = stage_val.get("pipeline")
+            if isinstance(sub_pipe, list):
+                res = _validate_pipeline(sub_pipe, depth + 1)
+                if not res.allowed:
+                    return res
+
+        if stage_name == "$unionWith":
+            # Shorthand form is a bare collection name; long form carries its
+            # own sub-pipeline, which needs the same walk as $lookup's.
+            coll = stage_val if isinstance(stage_val, str) else None
+            sub_pipe = None
+            if isinstance(stage_val, dict):
+                coll = stage_val.get("coll")
+                sub_pipe = stage_val.get("pipeline")
+            if isinstance(coll, str) and "." in coll:
+                return GuardResult(False, "union_cross_db_blocked")
             if isinstance(sub_pipe, list):
                 res = _validate_pipeline(sub_pipe, depth + 1)
                 if not res.allowed:

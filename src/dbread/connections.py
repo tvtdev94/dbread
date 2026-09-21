@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -65,16 +66,64 @@ def _install_mssql_query_timeout(engine: Engine, timeout_s: int) -> None:
 
 
 def _sqlite_args(_timeout_s: int) -> dict[str, Any]:
+    # Enforced by a progress handler instead — see _install_sqlite_query_timeout.
     return {}
 
 
 def _oracle_args(_timeout_s: int) -> dict[str, Any]:
+    # Enforced post-connect via `call_timeout` — see _install_oracle_query_timeout.
     return {}
 
 
 def _duckdb_args(_timeout_s: int) -> dict[str, Any]:
     # read-only mode is expressed in the URL: duckdb:///path?access_mode=read_only
+    # DuckDB exposes no statement-timeout knob; documented as unsupported.
     return {}
+
+
+# How often SQLite runs the progress callback, in VM instructions. Small
+# enough to abort promptly, large enough that the callback is not the cost.
+_SQLITE_PROGRESS_OPS = 10_000
+_TIMEOUT_STATE = "dbread_statement_started"
+
+
+def _install_sqlite_query_timeout(engine: Engine, timeout_s: int) -> None:
+    """Abort SQLite statements that outrun the configured timeout.
+
+    SQLite has no server-side timeout; the progress handler is the supported
+    interrupt point. State lives in the pool's per-connection `info` dict
+    because `sqlite3.Connection` rejects attribute assignment.
+    """
+
+    @event.listens_for(engine, "connect")
+    def _register(dbapi_connection, connection_record) -> None:
+        state: dict[str, float | None] = {"started": None}
+        connection_record.info[_TIMEOUT_STATE] = state
+
+        def _abort_when_overdue() -> int:
+            started = state["started"]
+            overdue = started is not None and time.monotonic() - started > timeout_s
+            return 1 if overdue else 0  # non-zero interrupts the statement
+
+        with contextlib.suppress(AttributeError, TypeError):
+            dbapi_connection.set_progress_handler(
+                _abort_when_overdue, _SQLITE_PROGRESS_OPS
+            )
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _start_clock(conn, _cursor, _statement, _params, _context, _executemany) -> None:
+        state = conn.connection.info.get(_TIMEOUT_STATE)
+        if state is not None:
+            state["started"] = time.monotonic()
+
+
+def _install_oracle_query_timeout(engine: Engine, timeout_s: int) -> None:
+    """Bound each round trip via python-oracledb's `call_timeout` (ms)."""
+
+    @event.listens_for(engine, "connect")
+    def _set_call_timeout(dbapi_connection, _connection_record) -> None:
+        with contextlib.suppress(AttributeError, TypeError):
+            dbapi_connection.call_timeout = timeout_s * 1000
 
 
 def _clickhouse_args(timeout_s: int) -> dict[str, Any]:
@@ -82,6 +131,14 @@ def _clickhouse_args(timeout_s: int) -> dict[str, Any]:
     # DB user's profile wasn't set up; plus bound each query's wall time.
     return {"settings": {"readonly": 1, "max_execution_time": timeout_s}}
 
+
+# Dialects whose timeout cannot ride along in connect_args and needs an
+# on-connect listener instead. DuckDB is absent: it has no such knob.
+_POST_CONNECT_TIMEOUT: dict[str, Callable[[Engine, int], None]] = {
+    "mssql": _install_mssql_query_timeout,
+    "sqlite": _install_sqlite_query_timeout,
+    "oracle": _install_oracle_query_timeout,
+}
 
 DIALECT_CONNECT_ARGS: dict[Dialect, Callable[[int], dict[str, Any]]] = {
     "postgres": _pg_args,
@@ -128,8 +185,9 @@ class ConnectionManager:
             connect_args=connect_args,
             echo=False,
         )
-        if cfg.dialect == "mssql":
-            _install_mssql_query_timeout(engine, cfg.statement_timeout_s)
+        installer = _POST_CONNECT_TIMEOUT.get(cfg.dialect)
+        if installer is not None:
+            installer(engine, cfg.statement_timeout_s)
         self._engines[name] = engine
         return engine
 

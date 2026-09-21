@@ -54,7 +54,9 @@ services:
       CLICKHOUSE_PASSWORD: ropw
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     ports:
-      - "81239:8123"
+      # Not 81239: host ports stop at 65535, and an invalid one here makes
+      # `docker compose up` reject the whole file, not just this service.
+      - "18123:8123"
     volumes:
       - ./fixtures/clickhouse-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ulimits:

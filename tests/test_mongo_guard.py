@@ -133,3 +133,59 @@ def test_inject_limit_does_not_mutate_input(guard: MongoGuard) -> None:
     cmd = {"find": "u"}
     guard.inject_limit(cmd, cap=50)
     assert "limit" not in cmd
+
+
+# ---- guard/executor field contract ----------------------------------------
+
+
+def test_guard_and_executor_agree_on_fields() -> None:
+    """The invariant that keeps silently-dropped options impossible.
+
+    `find` once accepted `sort` and then ignored it at execution, returning
+    unsorted rows with no error. Any field the guard lets through must be one
+    the executor actually applies.
+    """
+    from dbread.mongo.guard import COMMAND_FIELDS
+    from dbread.mongo.tools import HANDLED_FIELDS
+
+    assert COMMAND_FIELDS == HANDLED_FIELDS
+
+
+def test_every_allowed_command_declares_fields() -> None:
+    from dbread.mongo.guard import ALLOWED_COMMANDS, COMMAND_FIELDS
+
+    assert set(COMMAND_FIELDS) == set(ALLOWED_COMMANDS)
+
+
+def test_unknown_top_level_field_rejected(guard: MongoGuard) -> None:
+    res = guard.validate_command({"find": "u", "bogus": 1})
+    assert not res.allowed
+    assert res.reason == "field_not_allowed: bogus"
+
+
+def test_find_accepts_sort_skip_hint_collation(guard: MongoGuard) -> None:
+    res = guard.validate_command({
+        "find": "u", "sort": {"_id": -1}, "skip": 5,
+        "hint": "idx", "collation": {"locale": "en"},
+    })
+    assert res.allowed, res.reason
+
+
+def test_negative_skip_rejected(guard: MongoGuard) -> None:
+    res = guard.validate_command({"find": "u", "skip": -1})
+    assert not res.allowed
+    assert "non_negative" in res.reason
+
+
+def test_sort_must_be_dict(guard: MongoGuard) -> None:
+    res = guard.validate_command({"find": "u", "sort": "_id"})
+    assert not res.allowed
+    assert res.reason == "sort_must_be_dict"
+
+
+def test_aggregate_rejects_find_only_field(guard: MongoGuard) -> None:
+    """Field sets are per command, not one shared bag."""
+    res = guard.validate_command({
+        "aggregate": "u", "pipeline": [], "projection": {"a": 1},
+    })
+    assert not res.allowed

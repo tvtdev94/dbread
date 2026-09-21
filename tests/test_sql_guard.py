@@ -168,3 +168,49 @@ def test_ast_none_on_reject() -> None:
     r = guard.validate("DELETE FROM x", "postgres")
     assert not r.allowed
     assert r.ast is None
+
+
+# ---- lock and scope tightening --------------------------------------------
+
+
+def test_select_for_update_rejected() -> None:
+    """Reads that take writer locks can stall other sessions."""
+    res = guard.validate("SELECT * FROM users FOR UPDATE", "postgres")
+    assert not res.allowed
+    assert res.reason == "row_lock_not_allowed"
+
+
+def test_select_for_share_rejected() -> None:
+    res = guard.validate("SELECT * FROM users FOR SHARE", "postgres")
+    assert not res.allowed
+
+
+def test_use_statement_rejected() -> None:
+    """USE would move the session outside the configured database."""
+    res = guard.validate("USE other_db", "mysql")
+    assert not res.allowed
+
+
+def test_plain_select_still_allowed() -> None:
+    assert guard.validate("SELECT * FROM users", "postgres").allowed
+
+
+# ---- limit clamping --------------------------------------------------------
+
+
+def test_inject_limit_clamps_oversized_limit() -> None:
+    out = guard.inject_limit("SELECT * FROM t LIMIT 999999", "postgres", 100)
+    assert "999999" not in out
+    assert "LIMIT 100" in out.upper()
+
+
+def test_inject_limit_keeps_smaller_limit() -> None:
+    assert guard.inject_limit("SELECT * FROM t LIMIT 5", "postgres", 100) == (
+        "SELECT * FROM t LIMIT 5"
+    )
+
+
+def test_inject_limit_returns_original_text_when_unchanged() -> None:
+    """No LIMIT work means no sqlglot re-rendering of the caller's SQL."""
+    original = "SELECT id::text, data->>'k' FROM t LIMIT 5"
+    assert guard.inject_limit(original, "postgres", 100) == original

@@ -44,7 +44,52 @@ def test_pg_cte_dml_blocked(pg_url: str, tmp_path: Path) -> None:
 
 def test_pg_list_and_describe(pg_url: str, tmp_path: Path) -> None:
     h = build_handlers(pg_url, "postgres", tmp_path)
-    tables = h.list_tables("t", schema="public")
-    assert {"users", "orders"}.issubset(set(tables))
+    tables = {row["name"] for row in h.list_tables("t", schema="public")}
+    assert {"users", "orders"}.issubset(tables)
     info = h.describe_table("t", "users", schema="public")
     assert any(c["pk"] for c in info["columns"])
+
+
+def test_pg_describe_exposes_foreign_keys(pg_url: str, tmp_path: Path) -> None:
+    h = build_handlers(pg_url, "postgres", tmp_path)
+    fks = h.describe_table("t", "orders", schema="public")["foreign_keys"]
+    assert fks[0]["references"]["table"] == "users"
+
+
+def test_pg_list_schemas(pg_url: str, tmp_path: Path) -> None:
+    h = build_handlers(pg_url, "postgres", tmp_path)
+    assert "public" in h.list_schemas("t")
+
+
+def test_pg_compact_json_literal(pg_url: str, tmp_path: Path) -> None:
+    """':1' inside a JSON literal must not be read as a bind parameter."""
+    h = build_handlers(pg_url, "postgres", tmp_path)
+    assert h.query("t", sql="""SELECT '{"a":1}'::jsonb""")["rows"] == [[{"a": 1}]]
+
+
+def test_pg_params_are_bound(pg_url: str, tmp_path: Path) -> None:
+    h = build_handlers(pg_url, "postgres", tmp_path)
+    out = h.query(
+        "t", sql="SELECT total FROM orders WHERE user_id = :uid ORDER BY id LIMIT 1",
+        params={"uid": 2},
+    )
+    assert out["row_count"] == 1
+
+
+def test_pg_oversized_limit_is_clamped(pg_url: str, tmp_path: Path) -> None:
+    h = build_handlers(pg_url, "postgres", tmp_path, max_rows=2)
+    assert h.query("t", "SELECT * FROM users LIMIT 999999")["row_count"] == 2
+
+
+def test_pg_row_lock_rejected(pg_url: str, tmp_path: Path) -> None:
+    h = build_handlers(pg_url, "postgres", tmp_path)
+    with pytest.raises(ToolError, match="row_lock_not_allowed"):
+        h.query("t", "SELECT * FROM users FOR UPDATE")
+
+
+def test_pg_sample_and_profile(pg_url: str, tmp_path: Path) -> None:
+    h = build_handlers(pg_url, "postgres", tmp_path)
+    sample = h.sample_table("t", "orders", n=2, schema="public")
+    assert sample["row_count"] == 2
+    fields = {f["name"]: f for f in h.profile_table("t", "orders", schema="public")["fields"]}
+    assert fields["id"]["distinct_count"] == 3

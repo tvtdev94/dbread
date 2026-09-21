@@ -29,7 +29,10 @@ Single-process MCP server on a developer workstation. Client = Claude Code (trus
 | **I**nformation disclosure: audit record lost on crash | Power loss / `kill -9` mid-write | Layer 4: `fsync()` after every record | Low |
 | **I**nformation disclosure: credentials plaintext on wire | URL without TLS | Warn on `get_engine` if `sslmode=`/`ssl=`/`encrypt=` absent (PG/MySQL/MSSQL) | Medium — documented |
 | **I**nformation disclosure: sensitive tables readable | Over-broad GRANT SELECT | Docs: grant minimum tables/schemas | User-config dependent |
-| **D**enial of Service: runaway query | AI loops large queries | Layer 2.5 pre-exec EXPLAIN cost guard (postgres / mysql / mssql / oracle / duckdb / mongodb, opt-in `max_rows_estimate`) + Layer 2 rate limit + DB `statement_timeout` + LIMIT injection | Low |
+| **D**enial of Service: runaway query | AI loops large queries | Layer 2.5 pre-exec EXPLAIN cost guard (postgres / mysql / mssql / oracle / duckdb / mongodb, opt-in `max_rows_estimate`) + Layer 2 rate limit + DB `statement_timeout` (every dialect except DuckDB — see the [enforcement matrix](../README.md#%EF%B8%8F-security-model)) + Layer 3 LIMIT injection, which also clamps an oversized caller-supplied LIMIT | Low |
+| **D**enial of Service: row locks held by a read | `SELECT ... FOR UPDATE/SHARE` | Layer 1 rejects `Select.args["locks"]`; PG additionally refuses under `default_transaction_read_only` | Low |
+| **E**levation: leaving the configured database | `USE other_db` on MySQL/MSSQL | Layer 1 drops `USE` from the top-level allowlist | Low |
+| **I**nformation disclosure: a silently ignored query option | Mongo command carrying an option the executor never applies, returning wrong rows without an error | Layer 1 per-command field allowlist rejects unknown keys; a contract test pins the guard's accepted set equal to the executor's handled set | Low |
 | **D**enial of Service: audit fills disk | Unbounded log | Layer 4 rotation at 50 MB (1 backup = 100 MB cap) | Low |
 | **E**levation: side-effect function (`pg_read_file`, `xp_cmdshell`) | SELECT wrapping dangerous function | Layer 1 function blacklist + Layer 0 (no EXECUTE on superuser fns) | Low |
 | **D**enial of Service: time-based (`pg_sleep`, `dbms_lock.sleep`, `WAITFOR DELAY`) | Long-sleeping SELECT | Layer 1 blacklist (function + `WAITFOR` regex) + Layer 2 timeout | Low |
@@ -57,7 +60,7 @@ sqlglot parses differently per dialect. Layer 1 coverage mirrors that. Layer 0 (
 | oracle | Medium | PL/SQL `BEGIN..END` blocks parse as Command (rejected), `EXEC`, `CALL` | Package-name prefix on blacklisted funcs depends on parse |
 | clickhouse | Medium | `file`, `url`, `s3`, `hdfs`, `remote`, `remoteSecure`, `cluster`, camelCase normalised | New table functions land frequently; re-audit each ClickHouse release |
 | duckdb | Medium | `read_csv`, `read_parquet`, `read_json`, `COPY TO`, `INSTALL`, `LOAD`, `ATTACH http://...` | Extensions can add new readers after `INSTALL ext; LOAD ext;` (both blocked) |
-| mongodb | Medium — new code | Allowlist: only `find`/`count`/`distinct`/`aggregate`. Blocks `$out`, `$merge`, `$function`, `$accumulator`, `$where`, `mapReduce`, `$unionWith`, cross-DB `$lookup`. Recursively walks `$facet`, `$lookup.pipeline`. Max pipeline depth 10. | Allowlist is hand-curated; new Mongo versions add stages (default-deny flags them until reviewed). Adversarial suite ≥20 cases in v0.4. |
+| mongodb | Medium — new code | Allowlist: only `find`/`count`/`distinct`/`aggregate`, plus a per-command field allowlist. Blocks `$out`, `$merge`, `$function`, `$accumulator`, `$where`, `mapReduce`, cross-DB `$lookup`/`$unionWith`. Recursively walks `$facet`, `$lookup.pipeline`, `$unionWith.pipeline`. Max pipeline depth 10. | Allowlist is hand-curated; new Mongo versions add stages (default-deny flags them until reviewed). Adversarial suite ≥24 cases. |
 
 **Rule of thumb:** Strong = primary dialects the project integration-tests against. Medium = parsed dialect but weaker empirical coverage; treat Layer 0 as the only guarantee.
 
@@ -65,8 +68,9 @@ sqlglot parses differently per dialect. Layer 1 coverage mirrors that. Layer 0 (
 
 - **T** (Tampering via `$out`/`$merge`): blocked at Layer 1 by `MongoGuard` — allowlist rejects stage name; recursive walk catches nesting inside `$facet` / `$lookup.pipeline`. Layer 0 (user with `read` role only) is the non-bypassable backstop.
 - **E** (JS code execution via `$function` / `$accumulator` / `$where` / `mapReduce`): Layer 1 walks the entire command dict for these operator keys at any depth. `mapReduce` is rejected at the command-name allowlist level. Layer 0's `read` role also lacks EXECUTE on server-side JS.
-- **I** (Info disclosure via cross-collection `$lookup`): same-DB `$lookup` is legitimate read traffic and allowed; cross-DB `$lookup` (dotted `from: "db.coll"`) is rejected. `$unionWith` is blocked outright in v0.4 (safer default; can relax later).
-- **D** (DoS via deep pipelines): `MAX_PIPELINE_DEPTH=10` on nested `$facet`/`$lookup.pipeline` walks. Layer 2: `maxTimeMS = statement_timeout_s * 1000` injected into every command.
+- **I** (Info disclosure via cross-collection reads): same-DB `$lookup` and `$unionWith` are legitimate read traffic and allowed; the cross-DB form (dotted `from` / `coll`) is rejected for both. `$unionWith` was blocked outright in v0.4 as a conservative default and unblocked in v0.7 — it is read-only and no more powerful than `$lookup`, which was already allowed with sub-pipeline walking, so blocking it bought no containment.
+- **D** (DoS via deep pipelines): `MAX_PIPELINE_DEPTH=10` on nested `$facet`/`$lookup.pipeline`/`$unionWith.pipeline` walks. Layer 2: `maxTimeMS = statement_timeout_s * 1000` passed on every command, `distinct` included.
+- **I** (Info disclosure via a silently dropped option): `find` once accepted `sort` and `skip` and then ignored them, returning correct-looking but wrongly-ordered rows. Layer 1 now rejects any command key the executor does not apply, and a contract test keeps the two sets equal.
 - **R** (Repudiation): same JSONL audit; `redact_literals=true` recursively rewrites scalar values in `filter`/`pipeline` to `"?"`, preserving stage names, operator keys and schema fields (`$lookup.from`, etc.) for debuggability.
 
 ## If You Skip Layer 0

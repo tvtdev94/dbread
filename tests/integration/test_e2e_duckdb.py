@@ -41,7 +41,7 @@ def test_query_happy_path(duckdb_handlers) -> None:
 
 
 def test_list_tables(duckdb_handlers) -> None:
-    tables = duckdb_handlers.list_tables("t")
+    tables = {row["name"] for row in duckdb_handlers.list_tables("t")}
     assert "users" in tables
 
 

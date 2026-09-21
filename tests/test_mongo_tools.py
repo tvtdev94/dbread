@@ -72,7 +72,11 @@ def _build(tmp_path: Path, *, max_rows: int = 1000) -> tuple[ToolHandlers, Magic
 def test_list_tables_sorted(tmp_path: Path) -> None:
     handlers, db = _build(tmp_path)
     db.list_collection_names.return_value = ["orders", "users", "audit"]
-    assert handlers.list_tables("m") == ["audit", "orders", "users"]
+    assert handlers.list_tables("m") == [
+        {"name": "audit", "type": "collection"},
+        {"name": "orders", "type": "collection"},
+        {"name": "users", "type": "collection"},
+    ]
 
 
 def test_describe_table_samples_and_infers(tmp_path: Path) -> None:
@@ -268,3 +272,77 @@ def test_query_audit_redacts_when_flag_on(tmp_path: Path) -> None:
     logged_cmd = _json.loads(rec["sql"])
     assert logged_cmd["filter"]["email"] == "?"
     assert "alice@x.com" not in rec["sql"]
+
+
+# ---- find option fidelity --------------------------------------------------
+
+
+def _find_cursor(db: MagicMock) -> tuple[MagicMock, MagicMock]:
+    """Wire a chainable cursor so each option can be asserted individually."""
+    coll = MagicMock()
+    db.__getitem__.return_value = coll
+    cursor = MagicMock()
+    coll.find.return_value = cursor
+    for method in ("sort", "skip", "hint", "collation", "batch_size", "comment", "limit"):
+        getattr(cursor, method).return_value = cursor
+    cursor.max_time_ms.return_value = iter([])
+    return coll, cursor
+
+
+def test_find_applies_sort(tmp_path: Path) -> None:
+    handlers, db = _build(tmp_path)
+    _, cursor = _find_cursor(db)
+    handlers.query("m", command={"find": "u", "sort": {"_id": -1}})
+    cursor.sort.assert_called_once_with({"_id": -1})
+
+
+def test_find_applies_skip(tmp_path: Path) -> None:
+    handlers, db = _build(tmp_path)
+    _, cursor = _find_cursor(db)
+    handlers.query("m", command={"find": "u", "skip": 5})
+    cursor.skip.assert_called_once_with(5)
+
+
+def test_find_applies_hint_and_collation(tmp_path: Path) -> None:
+    handlers, db = _build(tmp_path)
+    _, cursor = _find_cursor(db)
+    handlers.query("m", command={
+        "find": "u", "hint": "idx_email", "collation": {"locale": "en"},
+    })
+    cursor.hint.assert_called_once_with("idx_email")
+    cursor.collation.assert_called_once_with({"locale": "en"})
+
+
+def test_find_without_options_leaves_cursor_alone(tmp_path: Path) -> None:
+    handlers, db = _build(tmp_path)
+    _, cursor = _find_cursor(db)
+    handlers.query("m", command={"find": "u"})
+    cursor.sort.assert_not_called()
+    cursor.skip.assert_not_called()
+
+
+def test_distinct_passes_max_time_ms(tmp_path: Path) -> None:
+    """statement_timeout_s must reach every command, distinct included."""
+    handlers, db = _build(tmp_path)
+    coll = MagicMock()
+    db.__getitem__.return_value = coll
+    coll.distinct.return_value = ["a"]
+    handlers.query("m", command={"distinct": "u", "key": "status"})
+    assert coll.distinct.call_args.kwargs["maxTimeMS"] == 30_000
+
+
+def test_explain_aggregate_injects_cursor(tmp_path: Path) -> None:
+    """The server rejects an aggregate explain that carries no cursor."""
+    handlers, db = _build(tmp_path)
+    handlers.explain("m", command={"aggregate": "u", "pipeline": []})
+    inner = db.command.call_args.args[1]
+    assert inner["cursor"] == {}
+
+
+def test_explain_maps_count_documents_to_server_command(tmp_path: Path) -> None:
+    """countDocuments is a driver helper; the server only knows `count`."""
+    handlers, db = _build(tmp_path)
+    handlers.explain("m", command={"countDocuments": "u", "filter": {"a": 1}})
+    inner = db.command.call_args.args[1]
+    assert "count" in inner
+    assert inner["query"] == {"a": 1}

@@ -25,8 +25,8 @@ def _handlers(mongo_url: str, tmp_path: pathlib.Path):
 def test_list_tables(mongo_url: str, tmp_path: pathlib.Path) -> None:
     handlers, mgr = _handlers(mongo_url, tmp_path)
     try:
-        names = handlers.list_tables("m")
-        assert {"users", "orders"} <= set(names)
+        names = {row["name"] for row in handlers.list_tables("m")}
+        assert {"users", "orders"} <= names
     finally:
         mgr.close_all()
 
@@ -127,5 +127,143 @@ def test_limit_injection_caps_result(mongo_url: str, tmp_path: pathlib.Path) -> 
         res = handlers.query("m", command={"find": "users"}, max_rows=2)
         assert res["row_count"] == 2
         assert res["truncated"] is True
+    finally:
+        mgr.close_all()
+
+
+# ---- find option fidelity against a real server ---------------------------
+
+
+def test_find_sort_is_applied(mongo_url: str, tmp_path: pathlib.Path) -> None:
+    """Seeded _id values are 1,2,3; a descending sort must invert them."""
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        res = handlers.query("m", command={
+            "find": "users", "projection": {"_id": 1}, "sort": {"_id": -1},
+        })
+        assert [row[0] for row in res["rows"]] == [3, 2, 1]
+    finally:
+        mgr.close_all()
+
+
+def test_find_skip_is_applied(mongo_url: str, tmp_path: pathlib.Path) -> None:
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        res = handlers.query("m", command={
+            "find": "users", "projection": {"_id": 1}, "skip": 2, "sort": {"_id": 1},
+        })
+        assert [row[0] for row in res["rows"]] == [3]
+    finally:
+        mgr.close_all()
+
+
+def test_newest_document_query(mongo_url: str, tmp_path: pathlib.Path) -> None:
+    """The shape every 'latest N rows' question takes."""
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        res = handlers.query("m", command={
+            "find": "users", "projection": {"_id": 1},
+            "sort": {"created": -1}, "limit": 1,
+        })
+        assert res["rows"] == [[3]]  # created 2026-03-01, the most recent
+    finally:
+        mgr.close_all()
+
+
+def test_unknown_find_field_is_rejected_not_ignored(
+    mongo_url: str, tmp_path: pathlib.Path
+) -> None:
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        with pytest.raises(ToolError, match="field_not_allowed"):
+            handlers.query("m", command={"find": "users", "bogusOption": 1})
+    finally:
+        mgr.close_all()
+
+
+def test_explain_aggregate(mongo_url: str, tmp_path: pathlib.Path) -> None:
+    """Aggregate explain needs a cursor document the caller never supplies."""
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        res = handlers.explain("m", command={
+            "aggregate": "orders",
+            "pipeline": [{"$group": {"_id": "$status", "n": {"$sum": 1}}}],
+        })
+        assert "plan" in res
+    finally:
+        mgr.close_all()
+
+
+# ---- newly allowlisted read-only stages -----------------------------------
+
+
+@pytest.mark.parametrize("stage", [
+    {"$unset": "amount"},
+    {"$setWindowFields": {
+        "sortBy": {"_id": 1},
+        "output": {"running": {
+            "$sum": "$amount",
+            "window": {"documents": ["unbounded", "current"]},
+        }},
+    }},
+    {"$unionWith": "users"},
+])
+def test_read_only_stage_allowed(
+    stage: dict, mongo_url: str, tmp_path: pathlib.Path
+) -> None:
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        assert handlers.query("m", command={
+            "aggregate": "orders", "pipeline": [stage],
+        })["row_count"] > 0
+    finally:
+        mgr.close_all()
+
+
+def test_union_with_cross_db_still_blocked(
+    mongo_url: str, tmp_path: pathlib.Path
+) -> None:
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        with pytest.raises(ToolError, match="cross_db"):
+            handlers.query("m", command={
+                "aggregate": "orders",
+                "pipeline": [{"$unionWith": {"coll": "otherdb.secrets"}}],
+            })
+    finally:
+        mgr.close_all()
+
+
+# ---- debug-fast tools ------------------------------------------------------
+
+
+def test_sample_table(mongo_url: str, tmp_path: pathlib.Path) -> None:
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        res = handlers.sample_table("m", "users", n=2)
+        assert res["ordered_by"] == "_id"
+        assert [row[0] for row in res["rows"]] == [3, 2]
+    finally:
+        mgr.close_all()
+
+
+def test_profile_table(mongo_url: str, tmp_path: pathlib.Path) -> None:
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        res = handlers.profile_table("m", "users")
+        fields = {f["name"]: f for f in res["fields"]}
+        assert fields["status"]["distinct_count"] == 2
+        # only the third seeded user carries tags
+        assert fields["tags"]["null_count"] == 2
+    finally:
+        mgr.close_all()
+
+
+def test_list_schemas_returns_pinned_database(
+    mongo_url: str, tmp_path: pathlib.Path
+) -> None:
+    handlers, mgr = _handlers(mongo_url, tmp_path)
+    try:
+        assert handlers.list_schemas("m") == ["dbread_test"]
     finally:
         mgr.close_all()

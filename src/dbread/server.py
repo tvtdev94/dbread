@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.8.0"
+SERVER_VERSION = "0.9.0"
 
 
 def _tool_schemas() -> list[Tool]:
@@ -39,7 +39,10 @@ def _tool_schemas() -> list[Tool]:
         ),
         Tool(
             name="list_tables",
-            description="List tables in a configured database connection.",
+            description=(
+                "List relations in a connection. Returns {name, type} where "
+                "type is table / view / materialized_view / collection."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -47,6 +50,59 @@ def _tool_schemas() -> list[Tool]:
                     "schema": {"type": "string", "description": "Optional schema filter"},
                 },
                 "required": ["connection"],
+            },
+        ),
+        Tool(
+            name="list_schemas",
+            description=(
+                "List schema names in a SQL connection. MongoDB returns the "
+                "single database this connection is pinned to."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"connection": {"type": "string"}},
+                "required": ["connection"],
+            },
+        ),
+        Tool(
+            name="sample_table",
+            description=(
+                "Preview the most recent rows of a table, ordered by the best "
+                "recency column (timestamp, else primary key; `_id` on Mongo). "
+                "Use this first when exploring unfamiliar data."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "connection": {"type": "string"},
+                    "table": {"type": "string"},
+                    "n": {"type": "integer", "minimum": 1, "default": 20},
+                    "schema": {"type": "string"},
+                },
+                "required": ["connection", "table"],
+            },
+        ),
+        Tool(
+            name="profile_table",
+            description=(
+                "Per-column data quality over a bounded sample: null count and "
+                "percentage, distinct count, and min/max for orderable types. "
+                "Use to find which column holds bad data."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "connection": {"type": "string"},
+                    "table": {"type": "string"},
+                    "columns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Subset to profile; omit for all columns",
+                    },
+                    "schema": {"type": "string"},
+                    "sample_size": {"type": "integer", "minimum": 1, "default": 5000},
+                },
+                "required": ["connection", "table"],
             },
         ),
         Tool(
@@ -82,6 +138,15 @@ def _tool_schemas() -> list[Tool]:
                         "description": "MongoDB command spec — for mongodb dialect",
                     },
                     "max_rows": {"type": "integer", "minimum": 1},
+                    "params": {
+                        "type": "object",
+                        "description": (
+                            "Optional bind parameters for :name placeholders "
+                            "(SQL only). Prefer these over inlining literals. "
+                            "Include your own LIMIT: automatic LIMIT injection "
+                            "is skipped for parameterized statements."
+                        ),
+                    },
                 },
                 "required": ["connection"],
             },
@@ -113,6 +178,7 @@ async def _run() -> None:
     env_path = Path(config_path).resolve().parent / ".env"
     if env_path.is_file():
         load_dotenv(env_path, override=False)
+
     settings = Settings.load(config_path)
 
     cm = ConnectionManager(settings)

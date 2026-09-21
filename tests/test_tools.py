@@ -64,7 +64,7 @@ def test_list_connections(tmp_path: Path) -> None:
 def test_list_tables(tmp_path: Path) -> None:
     h, _ = _build_handlers(tmp_path)
     tables = h.list_tables("test")
-    assert "users" in tables
+    assert {"name": "users", "type": "table"} in tables
 
 
 def test_describe_table(tmp_path: Path) -> None:
@@ -147,3 +147,121 @@ def test_query_max_rows_caps_at_config(tmp_path: Path) -> None:
     assert out["row_count"] <= 2
     last = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1])
     assert "LIMIT 2" in last["sql"].upper()
+
+
+# ---- introspection surfaces ------------------------------------------------
+
+
+def _seed_view_and_fk(db_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER "
+            "REFERENCES users(id), total NUMERIC, note TEXT)"
+        ))
+        conn.execute(text("INSERT INTO orders VALUES (1,1,10,'x'),(2,1,20,NULL),(3,2,30,NULL)"))
+        conn.execute(text("CREATE VIEW active_orders AS SELECT * FROM orders"))
+    engine.dispose()
+
+
+def test_list_tables_includes_views(tmp_path: Path) -> None:
+    """A view the agent cannot see is a view the agent decides does not exist."""
+    h, _ = _build_handlers(tmp_path)
+    _seed_view_and_fk(tmp_path / "test.db")
+    found = h.list_tables("test")
+    assert {"name": "active_orders", "type": "view"} in found
+    assert {"name": "orders", "type": "table"} in found
+
+
+def test_describe_table_exposes_foreign_keys(tmp_path: Path) -> None:
+    h, _ = _build_handlers(tmp_path)
+    _seed_view_and_fk(tmp_path / "test.db")
+    fks = h.describe_table("test", "orders")["foreign_keys"]
+    assert len(fks) == 1
+    assert fks[0]["columns"] == ["user_id"]
+    assert fks[0]["references"]["table"] == "users"
+
+
+def test_list_schemas(tmp_path: Path) -> None:
+    h, _ = _build_handlers(tmp_path)
+    assert "main" in h.list_schemas("test")
+
+
+# ---- row-count bounding ----------------------------------------------------
+
+
+def test_caller_supplied_limit_is_clamped(tmp_path: Path) -> None:
+    """An oversized LIMIT used to reach the server untouched."""
+    h, audit_path = _build_handlers(tmp_path, max_rows=2)
+    h.query("test", "SELECT * FROM users LIMIT 999999")
+    last = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert "LIMIT 2" in last["sql"].upper()
+    assert "999999" not in last["sql"]
+
+
+def test_limit_below_cap_left_alone(tmp_path: Path) -> None:
+    h, audit_path = _build_handlers(tmp_path, max_rows=100)
+    h.query("test", "SELECT * FROM users LIMIT 2")
+    last = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert "LIMIT 2" in last["sql"].upper()
+
+
+def test_truncated_reported_when_rows_reach_cap(tmp_path: Path) -> None:
+    """Hitting the cap always flags truncation, even if nothing was cut."""
+    h, _ = _build_handlers(tmp_path, max_rows=2)
+    out = h.query("test", "SELECT * FROM users")
+    assert out["row_count"] == 2
+    assert out["truncated"] is True
+
+
+def test_not_truncated_below_cap(tmp_path: Path) -> None:
+    h, _ = _build_handlers(tmp_path, max_rows=100)
+    assert h.query("test", "SELECT * FROM users")["truncated"] is False
+
+
+# ---- literals and parameters -----------------------------------------------
+
+
+def test_literal_with_colon_is_not_a_bind_parameter(tmp_path: Path) -> None:
+    """Compact JSON is what an agent writes; ':1' must stay a literal."""
+    h, _ = _build_handlers(tmp_path)
+    out = h.query("test", """SELECT '{"a":1}' AS j""")
+    assert out["rows"] == [['{"a":1}']]
+
+
+def test_params_are_bound(tmp_path: Path) -> None:
+    h, _ = _build_handlers(tmp_path)
+    out = h.query("test", "SELECT name FROM users WHERE id = :uid", params={"uid": 2})
+    assert out["rows"] == [["bob"]]
+
+
+# ---- sample_table / profile_table ------------------------------------------
+
+
+def test_sample_table_orders_by_primary_key_desc(tmp_path: Path) -> None:
+    h, _ = _build_handlers(tmp_path)
+    out = h.sample_table("test", "users", n=2)
+    assert out["ordered_by"] == "id"
+    assert [r[0] for r in out["rows"]] == [3, 2]
+
+
+def test_profile_table_reports_nulls_and_range(tmp_path: Path) -> None:
+    h, _ = _build_handlers(tmp_path)
+    _seed_view_and_fk(tmp_path / "test.db")
+    fields = {f["name"]: f for f in h.profile_table("test", "orders")["fields"]}
+    assert fields["note"]["null_count"] == 2
+    assert fields["id"]["distinct_count"] == 3
+    assert fields["id"]["min"] == 1
+    assert fields["id"]["max"] == 3
+
+
+def test_profile_table_rejects_unknown_column(tmp_path: Path) -> None:
+    h, _ = _build_handlers(tmp_path)
+    with pytest.raises(ToolError, match="invalid_input"):
+        h.profile_table("test", "users", columns=["nope"])
+
+
+def test_sample_table_unknown_table(tmp_path: Path) -> None:
+    h, _ = _build_handlers(tmp_path)
+    with pytest.raises(ToolError, match="unknown_table"):
+        h.sample_table("test", "does_not_exist")

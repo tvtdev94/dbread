@@ -57,7 +57,7 @@ dbread init
 
 Creates `~/.dbread/config.yaml`, `~/.dbread/.env`, and `~/.dbread/sample.db` (a tiny read-only SQLite demo so everything works immediately). Prints the exact `claude mcp add` line to paste in step 4. Skip to step 4 if you only want the demo; otherwise edit `config.yaml` / `.env` first (step 3).
 
-> 💡 **Claude Code users**: `dbread init` also installs a **skill** at `~/.claude/skills/dbread/SKILL.md` that teaches Claude the safe query workflow (discover → describe → query), SQL vs MongoDB routing, the `dbread add` / `add-extra` / `doctor` setup helpers, and how to recover from guard / rate-limit errors. **Auto-refreshes on `uv tool upgrade dbread`** (v0.7.2+) — no manual re-install needed.
+> 💡 **Claude Code users**: `dbread init` also installs a **skill** at `~/.claude/skills/dbread/SKILL.md` that teaches Claude the safe query workflow (discover → describe → query), SQL vs MongoDB routing, when to reach for `sample_table` / `profile_table`, the `dbread add` / `add-extra` / `doctor` setup helpers, and how to recover from guard / rate-limit errors. **Auto-refreshes on `uv tool upgrade dbread`** (v0.7.2+) — no manual re-install needed.
 
 ### 2b. Create a read-only DB user (when pointing at a real DB)
 
@@ -236,10 +236,17 @@ npx -p @mermaid-js/mermaid-cli mmdc \
 | Tool | Purpose | Input |
 |------|---------|-------|
 | `list_connections` | Configured connections + dialects | — |
-| `list_tables` | Tables in a connection | `connection`, `schema?` |
-| `describe_table` | SQL: columns/types/PKs/indexes. Mongo: sampled field schema + indexes | `connection`, `table`, `schema?` |
-| `query` | Run `SELECT`/`WITH`/`EXPLAIN`/`SHOW` (SQL) **or** Mongo `command` (find/count/distinct/aggregate). Auto-limited. Rate-limited. Audited. | `connection`, `sql` \| `command`, `max_rows?` |
+| `list_tables` | Relations in a connection, tagged `table` / `view` / `materialized_view` / `collection` | `connection`, `schema?` |
+| `list_schemas` | Schema names (Mongo: the one pinned database) | `connection` |
+| `describe_table` | SQL: columns/types/PKs/defaults/indexes/**foreign keys**. Mongo: sampled field schema + indexes | `connection`, `table`, `schema?` |
+| `sample_table` | Most recent rows, auto-ordered by timestamp column, else PK desc (`_id` on Mongo) | `connection`, `table`, `n?`, `schema?` |
+| `profile_table` | Per column: null count + %, distinct count, min/max — over a bounded sample | `connection`, `table`, `columns?`, `schema?`, `sample_size?` |
+| `query` | Run `SELECT`/`WITH`/`EXPLAIN`/`SHOW` (SQL) **or** Mongo `command` (find/count/distinct/aggregate). Auto-limited. Rate-limited. Audited. | `connection`, `sql` \| `command`, `max_rows?`, `params?` |
 | `explain` | Query execution plan | `connection`, `sql` \| `command` |
+
+**Debugging data fast.** `sample_table` then `profile_table` answers "what does
+this data actually look like, and which column is broken" in two calls instead
+of a dozen hand-written queries against the rate budget.
 
 ---
 
@@ -270,13 +277,26 @@ Full reference: [`docs/cli-reference.md`](docs/cli-reference.md).
 | Layer | Mechanism | What it rejects |
 |:-:|---|---|
 | **0** | DB user with `GRANT SELECT` only | **All writes — mandatory, non-bypassable** |
-| **1** | `sqlglot` AST validation (SQL) · allowlist validator (Mongo) | **SQL:** `INSERT` · `UPDATE` · `DELETE` · `MERGE` · `CREATE` · `ALTER` · `DROP` · `TRUNCATE` · `GRANT` · `REVOKE` · multi-statement (`SELECT 1; DROP...`) · **PG CTE-DML trick** (`WITH d AS (DELETE...) SELECT...`) · time-based DoS (`pg_sleep*`, `sleep`, `benchmark`, MSSQL `WAITFOR DELAY/TIME`) · function blacklist (`pg_read_file`, `xp_cmdshell`, `load_file`, `dblink_exec`, ClickHouse `url`/`s3`/`remote`, DuckDB `read_csv`/`read_parquet`, …). **Mongo:** only `find`/`count`/`distinct`/`aggregate`; blocks `$out` · `$merge` · `$function` · `$accumulator` · `$where` · `mapReduce` · `$unionWith` · cross-DB `$lookup` · recursively walks `$facet`/`$lookup.pipeline`. |
+| **1** | `sqlglot` AST validation (SQL) · allowlist validator (Mongo) | **SQL:** `INSERT` · `UPDATE` · `DELETE` · `MERGE` · `CREATE` · `ALTER` · `DROP` · `TRUNCATE` · `GRANT` · `REVOKE` · `USE` · `SELECT … FOR UPDATE/SHARE` · multi-statement (`SELECT 1; DROP...`) · **PG CTE-DML trick** (`WITH d AS (DELETE...) SELECT...`) · time-based DoS (`pg_sleep*`, `sleep`, `benchmark`, MSSQL `WAITFOR DELAY/TIME`) · function blacklist (`pg_read_file`, `xp_cmdshell`, `load_file`, `dblink_exec`, ClickHouse `url`/`s3`/`remote`, DuckDB `read_csv`/`read_parquet`, …). **Mongo:** only `find`/`count`/`distinct`/`aggregate`, **plus a per-command field allowlist so an unsupported option is rejected rather than silently ignored**; blocks `$out` · `$merge` · `$function` · `$accumulator` · `$where` · `mapReduce` · cross-DB `$lookup`/`$unionWith` · recursively walks `$facet`/`$lookup.pipeline`/`$unionWith.pipeline`. |
 | **2** | Rate limit + `statement_timeout` | Runaway loops · long-running queries |
 | **2.5** | Pre-exec cost guard — `EXPLAIN`-based row estimate (postgres / mysql / mssql / oracle / duckdb / mongodb; opt-in via `max_rows_estimate`) | Queries the planner estimates will return / scan more than `max_rows_estimate` rows |
-| **3** | Auto-inject `LIMIT N` | Oversized result sets |
+| **3** | Auto-inject `LIMIT N`, and clamp a larger caller-supplied `LIMIT` down to it | Oversized result sets |
 | **4** | JSONL audit log (`fsync` each write, 3-backup rotate, opt-in PII redact) | *(detection, not prevention — grep-friendly forensics)* |
 
 > 💡 **Principle:** Never rely on a single layer. Layer 0 is the guarantee; Layers 1–4 make attacks loud and rare.
+
+**Where `statement_timeout_s` is actually enforced** (Layer 2):
+
+| Dialect | Mechanism |
+|---------|-----------|
+| `postgres` | `-c statement_timeout` + `default_transaction_read_only=on` |
+| `mysql` | `SET SESSION MAX_EXECUTION_TIME` |
+| `mssql` | pyodbc `Connection.timeout` set on connect |
+| `clickhouse` | `max_execution_time` setting |
+| `sqlite` | `set_progress_handler` interrupt |
+| `oracle` | `Connection.call_timeout` |
+| `mongodb` | `maxTimeMS` on every command |
+| `duckdb` | **Not supported** — DuckDB exposes no statement-timeout knob. `max_rows` and the rate limit still apply. |
 
 Full threat model: [`docs/security-threat-model.md`](docs/security-threat-model.md) (STRIDE analysis).
 
@@ -418,7 +438,8 @@ cd tests/integration && docker compose up -d
 uv run pytest tests/integration/ -v
 ```
 
-- **600+ unit tests** cover config, connections, audit (fsync/tz/redact/rotate), SQL guard (**57 evasion cases incl. WAITFOR & sleep variants**), Mongo guard (**22 adversarial cases — $out/$merge smuggling, JS exec, cross-DB $lookup, deep nesting**), rate limiter, tools, **the v0.8 cost guard** (41 tests across 6 dialects + Mongo + integration), **`dbread query` CLI** (18 tests), **`dbread upgrade` CLI** (24 tests), **plus the v0.7 connection-string parsers** (84 tests across 6 format families × 8 dialects), **converter** (54 tests), **wizard + writers** (47 tests), **extras tracking** (36 tests), **CLI** (22 tests).
+- **600+ unit tests** cover config, connections, audit (fsync/tz/redact/rotate), SQL guard (**57 evasion cases incl. WAITFOR & sleep variants**), Mongo guard (**24 adversarial cases — $out/$merge smuggling, JS exec, cross-DB $lookup/$unionWith, deep nesting**), rate limiter, tools, **the v0.8 cost guard** (41 tests across 6 dialects + Mongo + integration), **`dbread query` CLI** (18 tests), **`dbread upgrade` CLI** (24 tests), **plus the v0.7 connection-string parsers** (84 tests across 6 format families × 8 dialects), **converter** (54 tests), **wizard + writers** (47 tests), **extras tracking** (36 tests), **CLI** (22 tests).
+- **A guard/executor contract test** asserts that every Mongo command field the guard accepts is one the executor actually applies — the invariant that stops an option from being silently dropped.
 - **4 subprocess smoke tests** drive `server.py` via real stdio JSON-RPC.
 - **4 SQLite + 4 DuckDB E2E tests** always run (no Docker).
 - **PG + MySQL + ClickHouse + MongoDB E2E tests** skip gracefully without Docker.
@@ -436,8 +457,12 @@ Honesty pass — what dbread does *not* do:
 - **No query cost estimator.** Layer 2 has `statement_timeout` and `LIMIT N`, but an expensive index-less scan that finishes in time still runs.
 - **Pre-1.0 project.** Real-world adversarial testing accumulates over time. Treat dbread as one layer of defense, not the whole perimeter.
 - **MongoDB guard is new (v0.4).** Allowlist-based, less battle-tested than sqlglot. Adversarial suite covers the known write-stage / JS-exec evasions; report new ones.
-- **Mongo schema is sampled, not authoritative** (default 100 docs). Rare fields may be missed — bump `mongo.sample_size` (max 1000) if needed.
-- **No Atlas Search / `$search` / `$vectorSearch` support.** Deferred to v0.5+.
+- **Mongo schema and `profile_table` are sampled, not authoritative** (default 100 docs on Mongo, 5000 rows on SQL). Rare fields and outliers may be missed — bump `mongo.sample_size` (max 1000) or `sample_size` if needed.
+- **No Atlas Search / `$search` / `$vectorSearch` support.** Deferred.
+- **No cursor pagination.** Deliberate: a `getMore` carries no query to re-validate and audits as an opaque cursor id, which would bypass Layers 1 and 4. Use `sort` + `limit`, then a range filter on the sort key for deeper pages.
+- **`params` skips LIMIT injection.** Re-serializing a parameterized statement would rewrite `:name` into a placeholder style the driver may not accept, so the SQL is left untouched and only the fetch cap applies. Include your own `LIMIT` with `params`.
+- **`truncated` is conservative.** A result landing exactly on `max_rows` reports `truncated: true` even when nothing was cut.
+- **`$indexStats` needs an extra grant** beyond the plain `read` role. It is allowlisted, and fails loudly with `not authorized` when the role lacks it.
 
 ---
 
@@ -494,9 +519,11 @@ Working from a git checkout (source install)? Run `bash scripts/dev-install.sh` 
 
 ```
 src/dbread/
-├── server.py            # MCP stdio entry — registers 5 tools, dispatches to handlers
+├── server.py            # MCP stdio entry — registers 8 tools, dispatches to handlers
 ├── tools.py             # SQL tool handlers (guard → limit → rate → exec → audit)
-├── sql_guard.py         # sqlglot AST validator + LIMIT injection
+├── explore.py           # statement builders for sample_table / profile_table
+├── cost_guard.py        # Layer 2.5 — EXPLAIN-based row estimate before execution
+├── sql_guard.py         # sqlglot AST validator + LIMIT injection/clamping
 ├── rate_limiter.py      # thread-safe token bucket per connection + global cap
 ├── connections.py       # SQLAlchemy engine manager (lazy, per-dialect)
 ├── config.py            # pydantic Settings (YAML + env)
@@ -505,8 +532,8 @@ src/dbread/
 ├── cli.py               # CLI dispatcher: init, add, add-extra, list-extras, doctor, audit, ...
 ├── mongo/               # MongoDB stack
 │   ├── client.py        # MongoClient manager (one per connection name)
-│   ├── guard.py         # allowlist validator + limit injection for commands
-│   ├── schema.py        # sample-based schema inference
+│   ├── guard.py         # command/stage/field allowlists + limit injection
+│   ├── schema.py        # sample-based schema inference + column profiling
 │   └── tools.py         # Mongo tool handlers (list/describe/query/explain)
 ├── extras/              # NEW v0.7 — driver-extra tracking
 │   ├── manager.py       # state file (~/.dbread/installed_extras.json) + find_spec scan

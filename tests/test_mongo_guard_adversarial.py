@@ -159,13 +159,32 @@ def test_cross_db_lookup_rejected(guard: MongoGuard) -> None:
     assert "cross_db" in res.reason
 
 
-def test_union_with_rejected(guard: MongoGuard) -> None:
+def test_union_with_same_db_allowed(guard: MongoGuard) -> None:
+    """$unionWith reads across collections exactly as $lookup already does."""
     res = guard.validate_command({
         "aggregate": "c",
         "pipeline": [{"$unionWith": "other"}],
     })
+    assert res.allowed
+
+
+def test_union_with_cross_db_rejected(guard: MongoGuard) -> None:
+    res = guard.validate_command({
+        "aggregate": "c",
+        "pipeline": [{"$unionWith": {"coll": "otherdb.coll"}}],
+    })
     assert not res.allowed
-    assert "$unionWith" in res.reason
+    assert "cross_db" in res.reason
+
+
+def test_union_with_sub_pipeline_is_walked(guard: MongoGuard) -> None:
+    """A write stage cannot hide inside $unionWith.pipeline."""
+    res = guard.validate_command({
+        "aggregate": "c",
+        "pipeline": [{"$unionWith": {"coll": "other", "pipeline": [{"$out": "leak"}]}}],
+    })
+    assert not res.allowed
+    assert "$out" in res.reason
 
 
 def test_empty_command_rejected(guard: MongoGuard) -> None:
