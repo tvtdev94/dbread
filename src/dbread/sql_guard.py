@@ -52,6 +52,16 @@ ALLOW_TOP_LEVEL: tuple[type[exp.Expression], ...] = (
 
 ALLOW_COMMAND_NAMES = {"EXPLAIN", "DESCRIBE", "DESC", "ANALYZE"}
 
+# dbread's dialect names match sqlglot's except for MSSQL, which sqlglot
+# calls `tsql`. Passing the wrong name raises ValueError, not ParseError, so
+# it used to escape the guard as an opaque internal error.
+_SQLGLOT_DIALECTS = {"mssql": "tsql"}
+
+
+def _sqlglot_dialect(dialect: str) -> str:
+    return _SQLGLOT_DIALECTS.get(dialect, dialect)
+
+
 FUNCTION_BLACKLIST = {
     # PostgreSQL - file/network/admin
     "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_stat_file",
@@ -106,8 +116,8 @@ class SqlGuard:
             return GuardResult(False, "command_rejected: WAITFOR")
 
         try:
-            stmts = sqlglot.parse(sql, read=dialect)
-        except sqlglot.errors.ParseError as e:
+            stmts = sqlglot.parse(sql, read=_sqlglot_dialect(dialect))
+        except (sqlglot.errors.ParseError, ValueError) as e:
             return GuardResult(False, f"parse_error: {e}")
 
         stmts = [s for s in stmts if s is not None]
@@ -154,9 +164,10 @@ class SqlGuard:
         return False
 
     def inject_limit(self, sql: str, dialect: str, max_rows: int) -> str:
+        read = _sqlglot_dialect(dialect)
         try:
-            stmts = sqlglot.parse(sql, read=dialect)
-        except sqlglot.errors.ParseError:
+            stmts = sqlglot.parse(sql, read=read)
+        except (sqlglot.errors.ParseError, ValueError):
             return sql
         if len(stmts) != 1 or stmts[0] is None:
             return sql
@@ -166,7 +177,7 @@ class SqlGuard:
             # rather than a re-serialized equivalent. Keeps sqlglot's
             # rendering out of the path of every already-bounded query.
             return sql
-        return root.sql(dialect=dialect)
+        return root.sql(dialect=read)
 
     def _apply_limit(self, root: exp.Expression, max_rows: int) -> bool:
         """Bound the row count. Returns True when the tree was modified."""
@@ -180,18 +191,28 @@ class SqlGuard:
 
 
 def _clamp_limit(node: exp.Expression, max_rows: int) -> bool:
-    """Add a LIMIT, or lower one that exceeds the cap. True when changed.
+    """Bound the row count at the server. True when the tree changed.
 
-    A caller-supplied `LIMIT 5000000` used to pass through untouched, so the
-    database still scanned and shipped every row and only the final fetch
-    truncated. Clamping keeps the work bounded at the server.
+    Anything that is not a plain integer literal within the cap counts as no
+    bound at all and gets replaced: `LIMIT ALL`, `FETCH FIRST n ROWS ONLY`,
+    `LIMIT 100+900000` and `LIMIT (SELECT ...)` all reach here, and letting
+    them through means the database scans and ships every row while only the
+    final fetch truncates.
     """
     limit = node.args.get("limit")
-    if limit is None:
-        node.limit(max_rows, copy=False)
-        return True
+    if limit is not None and _bounds_within(limit, max_rows):
+        return False
+    node.set("fetch", None)
+    node.limit(max_rows, copy=False)
+    return True
+
+
+def _bounds_within(limit: exp.Expression, max_rows: int) -> bool:
+    if not isinstance(limit, exp.Limit):
+        return False  # Fetch and friends carry their count elsewhere
     value = limit.expression
-    if isinstance(value, exp.Literal) and value.is_int and int(value.this) > max_rows:
-        node.limit(max_rows, copy=False)
-        return True
-    return False
+    return (
+        isinstance(value, exp.Literal)
+        and value.is_int
+        and 0 <= int(value.this) <= max_rows
+    )

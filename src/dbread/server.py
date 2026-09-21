@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.9.0"
+SERVER_VERSION = "0.9.1"
 
 
 def _tool_schemas() -> list[Tool]:

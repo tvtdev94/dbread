@@ -87,6 +87,37 @@ def test_pg_row_lock_rejected(pg_url: str, tmp_path: Path) -> None:
         h.query("t", "SELECT * FROM users FOR UPDATE")
 
 
+def test_pg_profile_survives_boolean_and_json(pg_url: str, tmp_path: Path) -> None:
+    """PostgreSQL has no min(boolean) and no equality operator for json.
+
+    Both used to abort the whole profile rather than degrade one column.
+    """
+    h = build_handlers(pg_url, "postgres", tmp_path)
+    fields = {
+        f["name"]: f
+        for f in h.profile_table("t", "profiles", schema="public")["fields"]
+    }
+    # boolean: countable and distinct-able, but no range
+    assert fields["is_active"]["distinct_count"] == 2
+    assert "min" not in fields["is_active"]
+    # json: null counts only
+    assert fields["payload"]["null_count"] == 0
+    assert "distinct_count" not in fields["payload"]
+    # text still gets the full treatment
+    assert fields["note"]["null_count"] == 1
+    assert fields["note"]["min"] == "x"
+
+
+def test_pg_empty_params_still_bounded(pg_url: str, tmp_path: Path) -> None:
+    h = build_handlers(pg_url, "postgres", tmp_path, max_rows=2)
+    assert h.query("t", "SELECT * FROM users", params={})["row_count"] == 2
+
+
+def test_pg_limit_all_is_clamped(pg_url: str, tmp_path: Path) -> None:
+    h = build_handlers(pg_url, "postgres", tmp_path, max_rows=2)
+    assert h.query("t", "SELECT * FROM users LIMIT ALL")["row_count"] == 2
+
+
 def test_pg_sample_and_profile(pg_url: str, tmp_path: Path) -> None:
     h = build_handlers(pg_url, "postgres", tmp_path)
     sample = h.sample_table("t", "orders", n=2, schema="public")

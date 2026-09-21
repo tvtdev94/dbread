@@ -235,6 +235,27 @@ def test_params_are_bound(tmp_path: Path) -> None:
     assert out["rows"] == [["bob"]]
 
 
+def test_empty_params_still_gets_a_limit(tmp_path: Path) -> None:
+    """`params={}` must not read as "parameterized" and drop the row bound.
+
+    A client that serializes an omitted-but-declared object property as {}
+    would otherwise run unbounded against the server.
+    """
+    h, audit_path = _build_handlers(tmp_path, max_rows=2)
+    h.query("test", "SELECT * FROM users", params={})
+    last = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert "LIMIT 2" in last["sql"].upper()
+
+
+def test_populated_params_skips_injection(tmp_path: Path) -> None:
+    """Documented trade-off: re-serializing would rewrite the placeholder."""
+    h, audit_path = _build_handlers(tmp_path, max_rows=2)
+    h.query("test", "SELECT * FROM users WHERE id = :uid", params={"uid": 1})
+    last = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert "LIMIT" not in last["sql"].upper()
+    assert ":uid" in last["sql"]
+
+
 # ---- sample_table / profile_table ------------------------------------------
 
 

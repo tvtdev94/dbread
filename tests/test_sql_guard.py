@@ -210,6 +210,29 @@ def test_inject_limit_keeps_smaller_limit() -> None:
     )
 
 
+@pytest.mark.parametrize("sql", [
+    "SELECT * FROM t LIMIT ALL",                      # postgres' explicit "no limit"
+    "SELECT * FROM t FETCH FIRST 999999 ROWS ONLY",
+    "SELECT * FROM t LIMIT 100+900000",
+    "SELECT * FROM t LIMIT (SELECT 999999)",
+])
+def test_inject_limit_replaces_unusable_bounds(sql: str) -> None:
+    """Only a plain integer literal within the cap counts as a real bound."""
+    out = guard.inject_limit(sql, "postgres", 100)
+    assert "LIMIT 100" in out.upper()
+    assert "999999" not in out
+
+
+def test_mssql_dialect_is_understood() -> None:
+    """sqlglot calls it `tsql`; passing `mssql` used to raise ValueError."""
+    assert guard.validate("SELECT * FROM t", "mssql").allowed
+    assert not guard.validate("DELETE FROM t", "mssql").allowed
+
+
+def test_mssql_limit_injection_uses_top() -> None:
+    assert guard.inject_limit("SELECT * FROM t", "mssql", 5) == "SELECT TOP 5 * FROM t"
+
+
 def test_inject_limit_returns_original_text_when_unchanged() -> None:
     """No LIMIT work means no sqlglot re-rendering of the caller's SQL."""
     original = "SELECT id::text, data->>'k' FROM t LIMIT 5"

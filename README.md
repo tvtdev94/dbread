@@ -439,7 +439,7 @@ uv run pytest tests/integration/ -v
 ```
 
 - **600+ unit tests** cover config, connections, audit (fsync/tz/redact/rotate), SQL guard (**57 evasion cases incl. WAITFOR & sleep variants**), Mongo guard (**24 adversarial cases — $out/$merge smuggling, JS exec, cross-DB $lookup/$unionWith, deep nesting**), rate limiter, tools, **the v0.8 cost guard** (41 tests across 6 dialects + Mongo + integration), **`dbread query` CLI** (18 tests), **`dbread upgrade` CLI** (24 tests), **plus the v0.7 connection-string parsers** (84 tests across 6 format families × 8 dialects), **converter** (54 tests), **wizard + writers** (47 tests), **extras tracking** (36 tests), **CLI** (22 tests).
-- **A guard/executor contract test** asserts that every Mongo command field the guard accepts is one the executor actually applies — the invariant that stops an option from being silently dropped.
+- **Per-field behavioral tests** prove `find` actually applies `sort`, `skip`, `hint` and `collation`, against both a recording fake and a live server. A cheaper contract test compares the guard's accepted field set with the executor's declared one, which catches the two drifting apart but does not by itself prove a field is applied.
 - **4 subprocess smoke tests** drive `server.py` via real stdio JSON-RPC.
 - **4 SQLite + 4 DuckDB E2E tests** always run (no Docker).
 - **PG + MySQL + ClickHouse + MongoDB E2E tests** skip gracefully without Docker.
@@ -460,6 +460,7 @@ Honesty pass — what dbread does *not* do:
 - **Mongo schema and `profile_table` are sampled, not authoritative** (default 100 docs on Mongo, 5000 rows on SQL). Rare fields and outliers may be missed — bump `mongo.sample_size` (max 1000) or `sample_size` if needed.
 - **No Atlas Search / `$search` / `$vectorSearch` support.** Deferred.
 - **No cursor pagination.** Deliberate: a `getMore` carries no query to re-validate and audits as an opaque cursor id, which would bypass Layers 1 and 4. Use `sort` + `limit`, then a range filter on the sort key for deeper pages.
+- **SQLite drops CTE column lists.** `WITH c(n) AS (...)` is re-serialized by sqlglot without the `(n)`, so the statement fails with `no such column`. Write `WITH c AS (SELECT 1 AS n ...)` instead. PostgreSQL, MySQL and DuckDB are unaffected.
 - **`params` skips LIMIT injection.** Re-serializing a parameterized statement would rewrite `:name` into a placeholder style the driver may not accept, so the SQL is left untouched and only the fetch cap applies. Include your own `LIMIT` with `params`.
 - **`truncated` is conservative.** A result landing exactly on `max_rows` reports `truncated: true` even when nothing was cut.
 - **`$indexStats` needs an extra grant** beyond the plain `read` role. It is allowlisted, and fails loudly with `not authorized` when the role lacks it.

@@ -17,11 +17,10 @@ if TYPE_CHECKING:
     from ..rate_limiter import RateLimiter
 
 
-# Top-level command keys `_execute` actually consumes. Declared independently
-# from the guard's COMMAND_FIELDS so that the equality test in
-# tests/test_mongo_guard.py is a real check: a field accepted by the guard but
-# never read here would be silently dropped, which is exactly the class of bug
-# this mirror exists to catch.
+# Top-level command keys `_execute` consumes, declared separately from the
+# guard's COMMAND_FIELDS so the equality test catches the two drifting apart.
+# It is a cheap tripwire, not a proof: the per-field tests in
+# tests/test_mongo_tools.py are what show an option reaches the driver.
 HANDLED_FIELDS: dict[str, frozenset[str]] = {
     "find": frozenset({
         "find", "filter", "projection", "sort", "skip", "limit",

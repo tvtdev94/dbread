@@ -18,6 +18,18 @@ CREATE TABLE orders (
   total NUMERIC(10, 2)
 );
 
+-- Column types that break naive aggregate profiling: PostgreSQL has no
+-- min(boolean) and no equality operator for json, so both must be excluded
+-- from MIN/MAX and COUNT(DISTINCT) respectively.
+CREATE TABLE profiles (
+  id SERIAL PRIMARY KEY,
+  is_active BOOLEAN,
+  payload JSON,
+  note TEXT
+);
+INSERT INTO profiles(is_active, payload, note)
+  VALUES (true, '{"a":1}', 'x'), (false, '{"b":2}', NULL);
+
 INSERT INTO users(name) VALUES ('alice'), ('bob'), ('carol');
 INSERT INTO orders(user_id, total) VALUES (1, 100), (1, 200), (2, 50);
 

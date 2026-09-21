@@ -19,10 +19,10 @@ from sqlalchemy import Table, distinct, func, select
 from sqlalchemy import types as sqltypes
 from sqlalchemy.engine import Engine
 
-# Types where MIN/MAX means something and every backend accepts the call.
-# JSON, arrays and binary blobs are deliberately absent: the aggregate either
-# errors or returns something meaningless.
-ORDERABLE_TYPES = (
+# Types that have an equality operator on every backend, so COUNT(DISTINCT x)
+# is safe. PostgreSQL has none for `json`, `xml` or the geometric types, and
+# the resulting error takes down the whole profile rather than one column.
+COMPARABLE_TYPES = (
     sqltypes.Numeric,
     sqltypes.Integer,
     sqltypes.Float,
@@ -32,6 +32,10 @@ ORDERABLE_TYPES = (
     sqltypes.Time,
     sqltypes.Boolean,
 )
+
+# Types that additionally have an ordering, so MIN/MAX means something.
+# Boolean is comparable but PostgreSQL has no `min(boolean)`.
+ORDERABLE_TYPES = tuple(t for t in COMPARABLE_TYPES if t is not sqltypes.Boolean)
 
 # Each column contributes up to four aggregates to one SELECT. A wide
 # analytics table would otherwise build a query with hundreds of them.
@@ -51,7 +55,7 @@ class ColumnPlan:
     name: str
     type_name: str
     nonnull_label: str
-    distinct_label: str
+    distinct_label: str | None
     min_label: str | None
     max_label: str | None
 
@@ -119,9 +123,12 @@ def profile_sql(
     for index, column in enumerate(chosen):
         source = sub.c[column.name]
         nonnull = f"c{index}_nonnull"
-        distinct_ = f"c{index}_distinct"
         selected.append(func.count(source).label(nonnull))
-        selected.append(func.count(distinct(source)).label(distinct_))
+
+        distinct_ = None
+        if isinstance(column.type, COMPARABLE_TYPES):
+            distinct_ = f"c{index}_distinct"
+            selected.append(func.count(distinct(source)).label(distinct_))
 
         min_label = max_label = None
         if isinstance(column.type, ORDERABLE_TYPES):
@@ -158,8 +165,9 @@ def build_profile(
             "type": plan.type_name,
             "null_count": nulls,
             "null_pct": round(nulls / sampled * 100, 1) if sampled else 0.0,
-            "distinct_count": int(row.get(plan.distinct_label) or 0),
         }
+        if plan.distinct_label is not None:
+            entry["distinct_count"] = int(row.get(plan.distinct_label) or 0)
         if plan.min_label is not None:
             entry["min"] = row.get(plan.min_label)
             entry["max"] = row.get(plan.max_label)

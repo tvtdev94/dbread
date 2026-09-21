@@ -17,10 +17,10 @@ ALLOWED_COMMANDS = frozenset({
 })
 
 # Per-command top-level field allowlist. Anything outside these sets is
-# rejected rather than silently ignored: the executor honors exactly these
-# keys, and `tests/test_mongo_guard.py` pins the two sets equal so a field
-# added here without executor support fails the suite instead of quietly
-# dropping the caller's intent.
+# rejected rather than silently ignored. Adding a field here means teaching
+# the executor to apply it and covering it with a behavioral test — the
+# equality check in `tests/test_mongo_guard.py` only catches the declarations
+# drifting apart, not a field that is declared and then never used.
 COMMAND_FIELDS: dict[str, frozenset[str]] = {
     "find": frozenset({
         "find", "filter", "projection", "sort", "skip", "limit",

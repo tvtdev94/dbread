@@ -172,8 +172,10 @@ class ToolHandlers:
         # not always the one the driver accepts. Leave it alone and let the
         # fetch cap bound the result, the same fallback already used when
         # sqlglot cannot parse a statement at all.
+        # Empty params is the same as none: a client that serializes an
+        # omitted object property as {} must not lose the row bound.
         sql_to_run = (
-            sql if params is not None
+            sql if params
             else self.guard.inject_limit(sql, cfg.dialect, effective)
         )
 
