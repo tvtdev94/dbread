@@ -48,7 +48,7 @@ class FakeDb:
         self.responder: Responder = lambda coll, pipeline: []
         self.calls: list[tuple[str, list]] = []
 
-    def list_collections(self, filter: dict | None = None):  # noqa: A002 - pymongo's name
+    def list_collections(self, filter: dict | None = None, **_: Any):  # noqa: A002 - pymongo's
         return iter(c for c in self.collections if not filter or c["name"] == filter["name"])
 
     def __getitem__(self, coll: str) -> FakeColl:
@@ -66,7 +66,9 @@ class FakeClient:
     def list_database_names(self) -> list[str]:
         return list(self.dbs)
 
-    def list_databases(self):
+    def list_databases(self, nameOnly: bool = False, **_: Any):  # noqa: N803 - pymongo's name
+        if nameOnly:
+            return iter({"name": n} for n in self.dbs)
         return iter(self.listed)
 
 
@@ -143,6 +145,17 @@ def test_star_allows_listed_databases_but_never_system_ones(tmp_path: Path) -> N
     assert handlers.list_schemas("m") == ["crm", "testdb"]
 
 
+def test_star_listing_failure_is_a_clean_db_error(tmp_path: Path) -> None:
+    handlers, client = build(tmp_path, databases=["*"])
+
+    def denied(**_: Any):
+        raise RuntimeError("not authorized to execute listDatabases")
+    client.list_databases = denied  # type: ignore[method-assign]
+    client.list_database_names = denied  # type: ignore[method-assign]
+    with pytest.raises(ToolError, match="db_error: not authorized"):
+        handlers.query("m", {"find": "leads"}, database="crm")
+
+
 def test_list_schemas_without_allowlist_is_the_uri_database(tmp_path: Path) -> None:
     handlers, _ = build(tmp_path)
     assert handlers.list_schemas("m") == ["testdb"]
@@ -163,7 +176,7 @@ def test_metadata_read_costs_one_token_and_one_audit_row(tmp_path: Path) -> None
 def test_metadata_failure_is_audited_and_reported_as_db_error(tmp_path: Path) -> None:
     handlers, client = build(tmp_path)
 
-    def denied():
+    def denied(**_: Any):
         raise RuntimeError("not authorized to execute listDatabases")
     client.list_databases = denied  # type: ignore[method-assign]
     with pytest.raises(ToolError, match="db_error: not authorized"):
@@ -250,15 +263,15 @@ def test_database_overview_shape(tmp_path: Path) -> None:
     db.collections = [coll("users"), coll("active_users", "view", viewOn="users")]
 
     def reply(coll_name: str, pipeline: list) -> list[dict]:
-        docs = sampled({"_id": 1, "email": "a", "age": 3}, {"_id": 2, "email": "b"})
         if "$collStats" in pipeline[0]:
-            return [{"count": 2, "size": 80, "storage": 4096, "index_sizes": {"_id_": 512}}, *docs]
-        return docs
+            return [{"count": 2, "size": 80, "storage": 4096, "index_sizes": {"_id_": 512}}]
+        return sampled({"_id": 1, "email": "a", "age": 3}, {"_id": 2, "email": "b"})
     db.responder = reply
 
     res = handlers.database_overview("m")
     assert res["connection"] == "m" and res["schema"] == "testdb"
     assert res["relationships"] == [] and res["source"] == "sampled"
+    assert res["truncated"] is False
     by_name = {t["name"]: t for t in res["tables"]}
     assert by_name["users"] == {
         "name": "users", "type": "collection", "row_estimate": 2,
@@ -267,6 +280,45 @@ def test_database_overview_shape(tmp_path: Path) -> None:
     # A view has no storage of its own, so it is only sampled.
     assert by_name["active_users"]["row_estimate"] is None
     assert by_name["active_users"]["primary_key"] == []
+
+
+def test_database_overview_reads_dotted_names_and_isolates_a_failing_collection(
+    tmp_path: Path,
+) -> None:
+    handlers, client = build(tmp_path)
+    db = client["testdb"]
+    db.collections = [coll("broken"), coll("fs.files")]
+
+    def reply(coll_name: str, pipeline: list) -> list[dict]:
+        if coll_name == "broken":
+            raise RuntimeError("operation exceeded time limit")
+        if "$collStats" in pipeline[0]:
+            return [{"count": 1, "size": 10, "storage": 100, "index_sizes": {}}]
+        return sampled({"_id": 1, "length": 5})
+    db.responder = reply
+
+    broken, files = handlers.database_overview("m")["tables"]
+    assert files == {"name": "fs.files", "type": "collection", "row_estimate": 1,
+                     "size_bytes": 100, "columns": 2, "primary_key": ["_id"]}
+    assert broken["error"].startswith("db_error: operation exceeded time limit")
+    assert (broken["row_estimate"], broken["size_bytes"], broken["columns"]) == (
+        None, None, None,
+    )
+
+
+@pytest.mark.parametrize("tool", ["database_overview", "schema_snapshot"])
+def test_whole_database_reads_stop_at_the_collection_cap(tmp_path: Path, tool: str) -> None:
+    from dbread.mongo.catalog import MAX_COLLECTIONS
+
+    handlers, client = build(tmp_path)
+    db = client["testdb"]
+    db.collections = [coll(f"c{i:03}") for i in range(MAX_COLLECTIONS + 1)]
+    res = getattr(handlers, tool)("m")
+    tables = res["tables"]
+    names = [t["name"] for t in tables] if isinstance(tables, list) else list(tables)
+    assert names == [f"c{i:03}" for i in range(MAX_COLLECTIONS)]
+    assert res["truncated"] is True
+    assert {name for name, _ in db.calls} == {f"c{i:03}" for i in range(MAX_COLLECTIONS)}
 
 
 def test_search_schema_matches_tables_and_fields_case_insensitively(tmp_path: Path) -> None:
@@ -322,4 +374,4 @@ def test_schema_snapshot_shape(tmp_path: Path) -> None:
                         "email": {"type": "string", "nullable": True}},
             "indexes": {},
         },
-    }}
+    }, "truncated": False}

@@ -54,13 +54,19 @@ class MongoBase:
         cfg = self.conn_mgr.get_config(connection)
         return list(cfg.mongo.databases or []) if cfg.mongo else []
 
+    def _max_time_ms(self, connection: str) -> int:
+        """The connection's statement timeout, as MongoDB's `maxTimeMS`."""
+        return max(1, self.conn_mgr.get_config(connection).statement_timeout_s) * 1000
+
     def allowed_databases(self, connection: str) -> list[str]:
         """URI database plus `mongo.databases` (`*` = every non-system db)."""
         names = {self.mc.get_db(connection).name}
         configured = self._configured_databases(connection)
         if "*" in configured:
-            listed = self.mc.get_client(connection).list_database_names()
-            names.update(n for n in listed if n not in SYSTEM_DATABASES)
+            listed = self.mc.get_client(connection).list_databases(
+                nameOnly=True, maxTimeMS=self._max_time_ms(connection),
+            )
+            names.update(d["name"] for d in listed if d["name"] not in SYSTEM_DATABASES)
         else:
             names.update(configured)
         return sorted(names)
@@ -73,11 +79,12 @@ class MongoBase:
         if not isinstance(database, str) or not database:
             raise_tool_error("invalid_input: database must be a non-empty string")
         configured = self._configured_databases(connection)
-        allowed = database in configured or (
-            "*" in configured
-            and database not in SYSTEM_DATABASES
-            and database in self.allowed_databases(connection)
-        )
+        allowed = database in configured
+        if not allowed and "*" in configured and database not in SYSTEM_DATABASES:
+            try:
+                allowed = database in self.allowed_databases(connection)
+            except Exception as e:  # pymongo raises many types; report one shape
+                raise_tool_error(f"db_error: {e}")
         if not allowed:
             raise_tool_error(f"database_not_allowed: {database}")
         return self.mc.get_client(connection)[database]

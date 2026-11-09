@@ -9,13 +9,17 @@ from .query import MongoQueryMixin
 from .schema import infer_schema, profile_docs
 
 
-def collection_infos(db: Any, name: str | None = None) -> list[dict[str, Any]]:
+def collection_infos(
+    db: Any, max_time_ms: int, name: str | None = None,
+) -> list[dict[str, Any]]:
     """listCollections as `[{"name","type","options"}]`, sorted, minus `system.*`.
 
     `system.*` namespaces are server bookkeeping (view definitions, bucket
     storage), not data an agent should be pointed at.
     """
-    found = db.list_collections(filter={"name": name}) if name else db.list_collections()
+    found = db.list_collections(
+        filter={"name": name} if name else None, maxTimeMS=max_time_ms,
+    )
     infos = [
         {"name": c["name"], "type": c.get("type", "collection"),
          "options": c.get("options") or {}}
@@ -43,8 +47,9 @@ class MongoInspectMixin(MongoQueryMixin):
     ) -> list[dict[str, str]]:
         op = {"listCollections": 1}
         db = self._resolve(connection, database, op)
+        ms = self._max_time_ms(connection)
         infos = self._metadata(
-            connection, op, lambda: collection_infos(db),
+            connection, op, lambda: collection_infos(db, ms),
             db_name=self._explicit(database, db),
         )
         return [{"name": c["name"], "type": c["type"]} for c in infos]
@@ -62,7 +67,9 @@ class MongoInspectMixin(MongoQueryMixin):
         self._resolve(connection, database, op)
 
         def read() -> list[dict[str, Any]]:
-            listed = {d["name"]: d for d in self.mc.get_client(connection).list_databases()}
+            client = self.mc.get_client(connection)
+            ms = self._max_time_ms(connection)
+            listed = {d["name"]: d for d in client.list_databases(maxTimeMS=ms)}
             out = []
             for name in self.allowed_databases(connection):
                 info = listed.get(name)
@@ -85,7 +92,7 @@ class MongoInspectMixin(MongoQueryMixin):
         db = self._resolve(connection, database, op)
 
         def read() -> tuple[list[dict], list[dict]]:
-            infos = collection_infos(db, table)
+            infos = collection_infos(db, self._max_time_ms(connection), table)
             kind = infos[0]["type"] if infos else "collection"
             return infos, (index_infos(db, table, kind) if infos else [])
 
@@ -170,11 +177,9 @@ class MongoInspectMixin(MongoQueryMixin):
     def _storage_stats(
         self, connection: str, table: str, database: str | None,
     ) -> dict[str, Any]:
-        docs = self._aggregate_docs(connection, table, [
-            {"$collStats": {"storageStats": {}}},
-            {"$project": STATS_PROJECTION},
-        ], database)
-        return sum_storage_stats(docs)
+        return sum_storage_stats(
+            self._aggregate_docs(connection, table, stats_pipeline(), database)
+        )
 
 
 STATS_PROJECTION = {
@@ -184,6 +189,11 @@ STATS_PROJECTION = {
     "storage": "$storageStats.storageSize",
     "index_sizes": "$storageStats.indexSizes",
 }
+
+
+def stats_pipeline() -> list[dict]:
+    """`$collStats` storage numbers, one row per shard."""
+    return [{"$collStats": {"storageStats": {}}}, {"$project": STATS_PROJECTION}]
 
 
 def sum_storage_stats(docs: list[dict]) -> dict[str, Any]:

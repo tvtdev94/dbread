@@ -25,7 +25,7 @@ class MongoQueryMixin(MongoBase):
         )
 
         cmd = dict(command)
-        cmd["maxTimeMS"] = max(1, cfg.statement_timeout_s) * 1000
+        cmd["maxTimeMS"] = self._max_time_ms(connection)
         db = self._resolve(connection, database, cmd)
         db_name = self._explicit(database, db)
 
@@ -82,9 +82,8 @@ class MongoQueryMixin(MongoBase):
     def explain(
         self, connection: str, command: dict, database: str | None = None,
     ) -> dict[str, Any]:
-        cfg = self.conn_mgr.get_config(connection)
         cmd = dict(command)
-        cmd["maxTimeMS"] = max(1, cfg.statement_timeout_s) * 1000
+        cmd["maxTimeMS"] = self._max_time_ms(connection)
         db = self._resolve(connection, database, cmd)
         db_name = self._explicit(database, db)
 

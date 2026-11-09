@@ -62,9 +62,28 @@ def test_all_checks_report_violations_and_examples(handlers) -> None:
     ]
 
 
-def test_checks_without_their_inputs_are_skipped(handlers) -> None:
-    res = handlers.check_integrity("m", "orders", checks=["orphans", "duplicates"])
-    assert res["checks"] == []
+def test_defaulted_checks_skip_what_has_no_inputs(handlers) -> None:
+    res = handlers.check_integrity("m", "orders")
+    assert [c["check"] for c in res["checks"]] == ["null_columns", "constant_columns"]
+
+
+def test_explicit_duplicates_without_unique_columns_reports_why(handlers) -> None:
+    res = handlers.check_integrity("m", "orders", checks=["duplicates"])
+    assert res["checks"] == [{"check": "duplicates", "target": "", "violations": None,
+                              "examples": [], "error": "unique_columns required"}]
+
+
+def test_a_number_and_a_boolean_are_not_one_constant(tmp_path: Path) -> None:
+    """BSON orders numbers before booleans, so $min/$max can be 1 and true."""
+    h, client = build(tmp_path)
+    db = client["testdb"]
+    db.collections = [coll("orders")]
+    db.responder = lambda c, p: (
+        sampled({"_id": 1, "flag": 1, "on": True}) if _stage(p) == "$sample"
+        else [{"total": 2, "n0": 2, "lo0": 1, "hi0": True, "n1": 2, "lo1": True, "hi1": True}]
+    )
+    (constants,) = h.check_integrity("m", "orders", checks=["constant_columns"])["checks"]
+    assert constants["examples"] == [{"column": "on", "value": True}]
 
 
 def test_one_failing_check_does_not_abort_the_others(tmp_path: Path) -> None:
@@ -96,6 +115,7 @@ def test_one_failing_check_does_not_abort_the_others(tmp_path: Path) -> None:
     ({"references": "users"}, "must be a list"),
     ({"unique_columns": ["a..b"]}, "field path"),
     ({"checks": ["orphan"]}, "unknown check: orphan"),
+    ({"checks": []}, "checks must not be empty"),
 ])
 def test_malformed_input_is_rejected_before_any_read(handlers, kwargs, message) -> None:
     with pytest.raises(ToolError, match=message):

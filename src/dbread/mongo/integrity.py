@@ -50,7 +50,8 @@ def _parse_references(references: Any) -> list[dict[str, str]]:
         to = ref.get("to")
         if not isinstance(to, str) or not to or "." in to or to.startswith("$"):
             raise_tool_error(
-                "invalid_input: reference 'to' must be a collection in the same database"
+                "invalid_input: reference 'to' must be a collection in the same database; "
+                f"names containing '.' or starting with '$' are not supported, got {to!r}"
             )
         out.append({
             "field": _field_name(ref.get("field"), "reference 'field'"),
@@ -70,6 +71,13 @@ def _counted(rows: list[dict]) -> tuple[int, list]:
 def _facet(examples: list[dict]) -> dict:
     return {"$facet": {"total": [{"$count": "n"}],
                        "examples": [*examples, {"$limit": MAX_EXAMPLES}]}}
+
+
+def _same_value(lo: Any, hi: Any) -> bool:
+    """`$min == $max` as BSON sees it: Python's `1 == True` is two BSON types."""
+    if isinstance(lo, bool) or isinstance(hi, bool):
+        return type(lo) is type(hi) and lo == hi
+    return lo == hi
 
 
 def _isolated(fn: Callable[[], T]) -> tuple[T | None, str | None]:
@@ -106,15 +114,22 @@ class MongoIntegrityMixin(MongoQueryMixin):
     ) -> dict[str, Any]:
         refs = _parse_references(references)
         unique = [_field_name(c, "unique_columns entry") for c in unique_columns or []]
-        wanted = list(CHECKS) if checks is None else list(checks)
+        if checks is not None and not checks:
+            raise_tool_error("invalid_input: checks must not be empty")
+        # Defaulted checks leave out duplicates when there is no key to check.
+        wanted = (
+            [c for c in CHECKS if c != "duplicates" or unique] if checks is None
+            else list(checks)
+        )
         unknown = [c for c in wanted if c not in CHECKS]
         if unknown:
             raise_tool_error(f"invalid_input: unknown check: {unknown[0]}")
 
         op = {"listCollections": 1}
         db = self._resolve(connection, database, op)
+        ms = self._max_time_ms(connection)
         names = {c["name"] for c in self._metadata(
-            connection, op, lambda: collection_infos(db),
+            connection, op, lambda: collection_infos(db, ms),
             db_name=self._explicit(database, db),
         )}
         if table not in names:
@@ -131,7 +146,9 @@ class MongoIntegrityMixin(MongoQueryMixin):
                     lambda r=ref: self._orphans(connection, table, r, database)
                 )
                 results.append(_entry("orphans", target, found, error))
-        if "duplicates" in wanted and unique:
+        if "duplicates" in wanted and not unique:
+            results.append(_entry("duplicates", "", error="unique_columns required"))
+        elif "duplicates" in wanted:
             found, error = _isolated(lambda: self._duplicates(connection, table, unique, database))
             results.append(_entry("duplicates", ",".join(unique), found, error))
         profiled = [c for c in ("null_columns", "constant_columns") if c in wanted]
@@ -175,7 +192,7 @@ class MongoIntegrityMixin(MongoQueryMixin):
     def _null_and_constant(
         self, connection: str, table: str, database: str | None,
     ) -> dict[str, list[dict]]:
-        sample =self._sample_docs(connection, table, self._sample_size(connection), database)
+        sample = self._sample_docs(connection, table, self._sample_size(connection), database)
         fields = sorted({
             path for doc in sample for path, _ in flatten_doc(doc)
             if path != "_id" and not any(p.startswith("$") or not p for p in path.split("."))
@@ -198,6 +215,6 @@ class MongoIntegrityMixin(MongoQueryMixin):
         for i, f in enumerate(fields):
             if int(row.get(f"n{i}", 0)) == 0:
                 found["null_columns"].append({"column": f})
-            elif total > 1 and row.get(f"lo{i}") == row.get(f"hi{i}"):
+            elif total > 1 and _same_value(row.get(f"lo{i}"), row.get(f"hi{i}")):
                 found["constant_columns"].append({"column": f, "value": row.get(f"lo{i}")})
         return found
