@@ -36,7 +36,7 @@ db.createCollection("customers", {
 });
 db.customers.insertMany([
   { _id: 1, name: "A", phone: "0123" },
-  { _id: 2, name: "B", phone: 12345 },
+  { _id: 2, name: "B", phone: NumberInt(12345) },
   { _id: 3, name: "C", phone: "0999" },
 ]);
 

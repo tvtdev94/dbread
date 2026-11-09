@@ -254,7 +254,7 @@ npx -p @mermaid-js/mermaid-cli mmdc \
 | `explain` | Query execution plan | `connection`, `sql` \| `command`, `database?` |
 
 `database` is MongoDB-only and must be in the connection's allowlist (see
-[Config](#️-config)); SQL connections reject it.
+[Config](#-config)); SQL connections reject it.
 
 **Debugging data fast.** `sample_table` then `profile_table` answers "what does
 this data actually look like, and which column is broken" in two calls instead
@@ -559,8 +559,12 @@ src/dbread/
 ├── mongo/               # MongoDB stack
 │   ├── client.py        # MongoClient manager (one per connection name)
 │   ├── guard.py         # command/stage/field allowlists + limit injection
-│   ├── schema.py        # sample-based schema inference + column profiling
-│   └── tools.py         # Mongo tool handlers (list/describe/query/explain)
+│   ├── schema.py        # sample-based schema inference + column profiling + type drift
+│   ├── base.py          # database allowlist scoping, metadata token + audit
+│   ├── query.py / execute.py  # guarded query + explain, command spec -> pymongo
+│   ├── inspect.py / catalog.py  # describe, list, collection_stats, overview, search, snapshot
+│   ├── integrity.py     # orphan / duplicate / null / constant checks
+│   └── tools.py         # MongoToolHandlers composing the modules above
 ├── extras/              # NEW v0.7 — driver-extra tracking
 │   ├── manager.py       # state file (~/.dbread/installed_extras.json) + find_spec scan
 │   └── installer.py     # subprocess wrapper: `uv tool install --force "dbread[<union>]"`

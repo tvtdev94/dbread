@@ -103,7 +103,7 @@ jobs:
             d.createCollection("customers", {validator: {$jsonSchema: {bsonType: "object", required: ["name"]}}});
             d.customers.insertMany([
               {_id:1, name:"A", phone:"0123"},
-              {_id:2, name:"B", phone:12345},
+              {_id:2, name:"B", phone:NumberInt(12345)},
               {_id:3, name:"C", phone:"0999"}
             ]);
             d.createView("active_users", "users", [{$match: {status: "active"}}]);

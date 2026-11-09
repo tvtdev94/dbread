@@ -54,7 +54,7 @@ def test_all_checks_report_violations_and_examples(handlers) -> None:
         {"check": "orphans", "target": "user_id -> users._id", "violations": 2,
          "examples": [{"_id": 7, "user_id": 99}], "error": None},
         {"check": "duplicates", "target": "email", "violations": 1,
-         "examples": [{"key": {"email": "a@x"}, "count": 3}], "error": None},
+         "examples": [{"email": "a@x", "duplicate_count": 3}], "error": None},
         {"check": "null_columns", "target": "orders", "violations": 1,
          "examples": [{"column": "legacy"}], "error": None},
         {"check": "constant_columns", "target": "orders", "violations": 1,

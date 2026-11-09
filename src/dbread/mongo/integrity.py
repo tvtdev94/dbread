@@ -167,7 +167,7 @@ class MongoIntegrityMixin(MongoQueryMixin):
             _facet([{"$sort": {"n": -1}}]),
         ], database, max_rows=1, allow_disk_use=True))
         examples = [
-            {"key": {c: g["_id"].get(f"k{i}") for i, c in enumerate(cols)}, "count": g["n"]}
+            {**{c: g["_id"].get(f"k{i}") for i, c in enumerate(cols)}, "duplicate_count": g["n"]}
             for g in groups
         ]
         return n, examples

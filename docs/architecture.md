@@ -14,8 +14,11 @@ dbread is a single-process Python MCP server that proxies **read-only** SQL quer
                              │   │  tools   │  list_connections            │
                              │   │          │  list_tables                 │
                              │   │          │  describe_table              │
-                             │   │          │  query                       │
-                             │   │          │  explain                     │
+                             │   │          │  query · explain             │
+                             │   │          │  sample/profile_table        │
+                             │   │          │  database_overview · search  │
+                             │   │          │  check_integrity · diff      │
+                             │   │          │  db_health · collection_stats│
                              │   └────┬─────┘                              │
                              │        │                                    │
                              │   ┌────▼────┐  ┌────────┐  ┌────────┐       │
@@ -92,13 +95,31 @@ src/dbread/
 ├── rate_limiter.py      # token bucket per connection
 ├── server.py            # MCP server entry (stdio)
 ├── sql_guard.py         # sqlglot AST validation + LIMIT injection
-├── tools.py             # 5 tool handlers wiring everything (polymorphic)
+├── tools.py             # per-table tool handlers (polymorphic SQL / Mongo)
+├── inspection_tools.py  # whole-database tools mixed into ToolHandlers
+├── inspection/          # SQL catalog reads, integrity + health statements, snapshot/diff
 └── mongo/
-    ├── client.py        # MongoClient manager
+    ├── client.py        # MongoClient manager (+ read preference)
     ├── guard.py         # allowlist validator + limit injection
-    ├── schema.py        # sample-based schema inference
-    └── tools.py         # Mongo tool handlers
+    ├── schema.py        # sample-based schema inference + type-drift profiling
+    ├── base.py          # database allowlist scoping, metadata token + audit
+    ├── query.py         # guarded query + explain (every data read)
+    ├── execute.py       # command spec -> pymongo calls
+    ├── inspect.py       # describe, list, collection_stats
+    ├── catalog.py       # overview, schema search, snapshot
+    ├── integrity.py     # orphan / duplicate / null / constant checks
+    └── tools.py         # MongoToolHandlers composing the modules above
 ```
+
+## Whole-database inspection
+
+`database_overview`, `search_schema` and `diff_schema` read the catalog
+(SQLAlchemy inspector, Mongo `listCollections`) and cost one rate-limit token
+plus one audit row per call. Anything that reads rows or statistics views —
+`list_tables` size estimates, `check_integrity`, `db_health`, Mongo sampling —
+goes through the normal `query` path, so the guard, cost guard, statement
+timeout, rate limit and audit apply to every statement. Mongo tools accept a
+`database` argument checked against `mongo.databases`.
 
 ## MongoDB Subsystem
 

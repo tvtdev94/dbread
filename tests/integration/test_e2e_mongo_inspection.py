@@ -79,7 +79,7 @@ def test_describe_view_has_no_indexes(make) -> None:
 def test_profile_flags_type_drift(make) -> None:
     (phone,) = make().profile_table("m", "customers", columns=["phone"])["fields"]
     assert phone["type_drift"] is True
-    assert set(phone["types"]) == {"string", "double"}
+    assert set(phone["types"]) == {"string", "int"}
 
 
 # ---- database allowlist ------------------------------------------------------
@@ -164,7 +164,7 @@ def test_check_integrity_finds_seeded_problems(make) -> None:
     assert checks["orphans"]["violations"] == 1
     assert checks["orphans"]["examples"][0]["user_id"] == 42
     assert checks["duplicates"]["violations"] == 1
-    assert checks["duplicates"]["examples"][0] == {"key": {"user_id": 1}, "count": 2}
+    assert checks["duplicates"]["examples"][0] == {"user_id": 1, "duplicate_count": 2}
     assert checks["null_columns"]["examples"] == [{"column": "legacy"}]
     assert checks["constant_columns"]["examples"] == [{"column": "source", "value": "web"}]
 
