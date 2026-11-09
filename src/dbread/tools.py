@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +13,8 @@ from .audit import AuditLogger
 from .config import Settings
 from .connections import ConnectionManager
 from .cost_guard import CostGuard
+from .inspection import catalog
+from .inspection_tools import InspectionTools
 from .rate_limiter import RateLimiter
 from .sql_guard import SqlGuard
 
@@ -25,7 +26,7 @@ class ToolError(Exception):
     """Error raised by a tool handler; surfaced to the MCP caller as JSON."""
 
 
-class ToolHandlers:
+class ToolHandlers(InspectionTools):
     def __init__(
         self,
         settings: Settings,
@@ -48,90 +49,48 @@ class ToolHandlers:
         return [{"name": n, "dialect": d} for n, d in self.cm.list_connections()]
 
     def list_tables(
-        self, connection: str, schema: str | None = None
-    ) -> list[dict[str, str]]:
-        """Every queryable relation, tagged by kind.
+        self, connection: str, schema: str | None = None, database: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Every queryable relation, tagged by kind, with size where known.
 
         Views and materialized views are listed alongside base tables: an
         agent that cannot see them concludes they do not exist and rebuilds
         the analysis from base tables instead.
         """
-        cfg = self.cm.get_config(connection)
+        cfg = self._route(connection, database)
         if cfg.dialect == "mongodb":
-            self._require_mongo()
-            return [
-                {"name": name, "type": "collection"}
-                for name in self.mongo.list_tables(connection)
-            ]
+            return self.mongo.list_tables(connection, **_db(database))
         engine = self.cm.get_engine(connection)
         insp = sa_inspect(engine)
-        found = [{"name": n, "type": "table"} for n in insp.get_table_names(schema=schema)]
-        found += [{"name": n, "type": "view"} for n in insp.get_view_names(schema=schema)]
-        # Only a few dialects implement materialized views; the rest raise.
-        with contextlib.suppress(NotImplementedError, AttributeError):
-            found += [
-                {"name": n, "type": "materialized_view"}
-                for n in insp.get_materialized_view_names(schema=schema)
-            ]
-        return sorted(found, key=lambda r: r["name"])
+        found = catalog.list_relations(insp, schema)
+        stats_sql = catalog.stats_statement(cfg.dialect, cfg.max_rows)
+        rows: list[list[Any]] = []
+        if stats_sql is not None:
+            resolved = schema if schema is not None else insp.default_schema_name
+            rows = self.query(connection, sql=stats_sql, params={"schema": resolved})["rows"]
+        catalog.attach_stats(found, rows)
+        return found
 
-    def list_schemas(self, connection: str) -> list[str]:
+    def list_schemas(self, connection: str, database: str | None = None) -> list[str]:
         """Schema names, so a multi-schema database is discoverable."""
-        cfg = self.cm.get_config(connection)
+        cfg = self._route(connection, database)
         if cfg.dialect == "mongodb":
-            self._require_mongo()
-            # A connection is pinned to one database; listing the others
-            # would hand back names outside the configured scope.
-            return self.mongo.list_schemas(connection)
+            # Only the databases this connection is allowed to read.
+            return self.mongo.list_schemas(connection, **_db(database))
         engine = self.cm.get_engine(connection)
         return sa_inspect(engine).get_schema_names()
 
     def describe_table(
-        self, connection: str, table: str, schema: str | None = None
+        self,
+        connection: str,
+        table: str,
+        schema: str | None = None,
+        database: str | None = None,
     ) -> dict[str, Any]:
-        cfg = self.cm.get_config(connection)
+        cfg = self._route(connection, database)
         if cfg.dialect == "mongodb":
-            self._require_mongo()
-            return self.mongo.describe_table(connection, table)
-        engine = self.cm.get_engine(connection)
-        insp = sa_inspect(engine)
-        columns = insp.get_columns(table, schema=schema)
-        indexes = insp.get_indexes(table, schema=schema)
-        pks = insp.get_pk_constraint(table, schema=schema).get("constrained_columns", [])
-        return {
-            "columns": [
-                {
-                    "name": c["name"],
-                    "type": str(c["type"]),
-                    "nullable": c.get("nullable", True),
-                    "pk": c["name"] in pks,
-                    "default": _as_text(c.get("default")),
-                }
-                for c in columns
-            ],
-            "indexes": [
-                {
-                    "name": i.get("name"),
-                    "columns": i.get("column_names", []),
-                    "unique": i.get("unique", False),
-                }
-                for i in indexes
-            ],
-            # The join map. Without it an agent guesses at relationships or
-            # has to go read pg_constraint by hand.
-            "foreign_keys": [
-                {
-                    "name": fk.get("name"),
-                    "columns": fk.get("constrained_columns", []),
-                    "references": {
-                        "schema": fk.get("referred_schema"),
-                        "table": fk.get("referred_table"),
-                        "columns": fk.get("referred_columns", []),
-                    },
-                }
-                for fk in insp.get_foreign_keys(table, schema=schema)
-            ],
-        }
+            return self.mongo.describe_table(connection, table, **_db(database))
+        return catalog.describe(sa_inspect(self.cm.get_engine(connection)), table, schema)
 
     def query(
         self,
@@ -140,17 +99,17 @@ class ToolHandlers:
         command: dict | None = None,
         max_rows: int | None = None,
         params: dict[str, Any] | None = None,
+        database: str | None = None,
     ) -> dict[str, Any]:
-        cfg = self.cm.get_config(connection)
+        cfg = self._route(connection, database)
         if cfg.dialect == "mongodb":
-            self._require_mongo()
             if sql is not None:
                 raise ToolError("invalid_input: command required for mongodb connection")
             if command is None:
                 raise ToolError("invalid_input: command field required")
             if params is not None:
                 raise ToolError("invalid_input: params is for SQL connections only")
-            return self.mongo.query(connection, command, max_rows)
+            return self.mongo.query(connection, command, max_rows, **_db(database))
 
         if command is not None:
             raise ToolError("invalid_input: sql required for SQL connection")
@@ -249,16 +208,17 @@ class ToolHandlers:
         table: str,
         n: int = 20,
         schema: str | None = None,
+        database: str | None = None,
     ) -> dict[str, Any]:
         """Most recent rows, ordered by the best recency column available."""
-        cfg = self.cm.get_config(connection)
+        cfg = self._route(connection, database)
         # The declared inputSchema is advertising — the MCP SDK does not
         # enforce it — so every caller-supplied bound is clamped here.
         rows = _clamp(n, 1, cfg.max_rows)
         if cfg.dialect == "mongodb":
-            self._require_mongo()
             out = self.mongo.query(
-                connection, {"find": table, "sort": {"_id": -1}, "limit": rows}, rows
+                connection, {"find": table, "sort": {"_id": -1}, "limit": rows}, rows,
+                **_db(database),
             )
             out["ordered_by"] = "_id"
             return out
@@ -281,6 +241,7 @@ class ToolHandlers:
         columns: list[str] | None = None,
         schema: str | None = None,
         sample_size: int | None = None,
+        database: str | None = None,
     ) -> dict[str, Any]:
         """Null rate, distinct count and range per column, over a sample.
 
@@ -290,10 +251,11 @@ class ToolHandlers:
         bounds it — the sample size is the only limit on how much the server
         reads, which is why it is clamped rather than trusted.
         """
-        cfg = self.cm.get_config(connection)
+        cfg = self._route(connection, database)
         if cfg.dialect == "mongodb":
-            self._require_mongo()
-            return self.mongo.profile_table(connection, table, columns, sample_size)
+            return self.mongo.profile_table(
+                connection, table, columns, sample_size, **_db(database)
+            )
 
         size = _clamp(
             sample_size if sample_size is not None else explore.DEFAULT_SAMPLE_SIZE,
@@ -331,15 +293,15 @@ class ToolHandlers:
         connection: str,
         sql: str | None = None,
         command: dict | None = None,
+        database: str | None = None,
     ) -> dict[str, Any]:
-        cfg = self.cm.get_config(connection)
+        cfg = self._route(connection, database)
         if cfg.dialect == "mongodb":
-            self._require_mongo()
             if sql is not None:
                 raise ToolError("invalid_input: command required for mongodb connection")
             if command is None:
                 raise ToolError("invalid_input: command field required")
-            return self.mongo.explain(connection, command)
+            return self.mongo.explain(connection, command, **_db(database))
 
         if command is not None:
             raise ToolError("invalid_input: sql required for SQL connection")
@@ -384,9 +346,13 @@ def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(int(value), high))
 
 
-def _as_text(value: Any) -> str | None:
-    """Render a column default for JSON; drivers hand back mixed types."""
-    return None if value is None else str(value)
+def _db(database: str | None) -> dict[str, str]:
+    """`database=` for a MongoToolHandlers call, only when the caller chose one.
+
+    Leaving it out when unset keeps the handler's own default (the URI
+    database) in charge.
+    """
+    return {} if database is None else {"database": database}
 
 
 def _build_explain(sql: str, dialect: str) -> str:
