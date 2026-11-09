@@ -101,17 +101,17 @@ def _min_max(values: list) -> tuple[Any, Any]:
 
 
 def profile_docs(sample: list[dict], requested: list[str] | None = None) -> list[dict]:
-    """Per-field null / distinct / min / max over an in-memory sample.
+    """Per-field null / distinct / min / max / type mix over an in-memory sample.
 
-    The sample is already fetched for schema inference, so the statistics
-    cost nothing extra at the server.
+    `types` maps each bson type to its share of the non-null values;
+    `type_drift` flags a field holding more than one non-null type.
     """
     total = len(sample)
     present: dict[str, list] = defaultdict(list)
-    types_by_path: dict[str, set[str]] = defaultdict(set)
+    types_by_path: dict[str, Counter] = defaultdict(Counter)
     for doc in sample:
         for path, value in flatten_doc(doc):
-            types_by_path[path].add(bson_type(value))
+            types_by_path[path][bson_type(value)] += 1
             if value is not None:
                 present[path].append(value)
 
@@ -131,9 +131,13 @@ def profile_docs(sample: list[dict], requested: list[str] | None = None) -> list
     for path in paths:
         values = present.get(path, [])
         nulls = total - len(values)
+        non_null = {t: n for t, n in types_by_path[path].items() if t != "null"}
         entry: dict[str, Any] = {
             "name": path,
-            "types": sorted(types_by_path.get(path, set())),
+            "types": {
+                t: round(n / len(values) * 100, 1) for t, n in sorted(non_null.items())
+            },
+            "type_drift": len(non_null) > 1,
             "null_count": nulls,
             "null_pct": round(nulls / total * 100, 1) if total else 0.0,
             "distinct_count": _distinct_count(values),
@@ -167,3 +171,28 @@ def infer_schema(sample: list[dict], sample_size: int) -> list[dict]:
             "pk": path == "_id",
         })
     return fields
+
+
+def field_summary(sample: list[dict]) -> dict[str, dict[str, Any]]:
+    """Per-path `{"type", "nullable"}` in the shape schema snapshots share.
+
+    `type` is the one non-null bson type seen, `"mixed"` when several were,
+    `"null"` when only nulls were. `nullable` means the field was missing or
+    null in at least one sampled document.
+    """
+    types_by_path: dict[str, set[str]] = defaultdict(set)
+    present: Counter = Counter()
+    nulls: set[str] = set()
+    for doc in sample:
+        for path, value in flatten_doc(doc):
+            present[path] += 1
+            if value is None:
+                nulls.add(path)
+            else:
+                types_by_path[path].add(bson_type(value))
+    out: dict[str, dict[str, Any]] = {}
+    for path in sorted(present):
+        kinds = types_by_path.get(path, set())
+        kind = next(iter(kinds)) if len(kinds) == 1 else ("mixed" if kinds else "null")
+        out[path] = {"type": kind, "nullable": path in nulls or present[path] < len(sample)}
+    return out
