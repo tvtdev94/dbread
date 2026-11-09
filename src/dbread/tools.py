@@ -67,7 +67,12 @@ class ToolHandlers(InspectionTools):
         rows: list[list[Any]] = []
         if stats_sql is not None:
             resolved = schema if schema is not None else insp.default_schema_name
-            rows = self.query(connection, sql=stats_sql, params={"schema": resolved})["rows"]
+            try:
+                rows = self.query(connection, sql=stats_sql, params={"schema": resolved})["rows"]
+            except ToolError:
+                # Sizes are optional: a spent rate limit or a missing grant
+                # must not hide the relation list. The refusal is audited.
+                rows = []
         catalog.attach_stats(found, rows)
         return found
 

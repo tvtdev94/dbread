@@ -11,16 +11,19 @@ from typing import Any
 
 from sqlalchemy.engine.reflection import Inspector
 
-from .catalog import columns_by_table
+from .catalog import capped, columns_by_table
 
 
 def sql_snapshot(
     insp: Inspector, schema: str | None, relations: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    columns = columns_by_table(insp, schema)
-    indexes = {key[1]: idx for key, idx in insp.get_multi_indexes(schema=schema).items()}
+    kept, truncated = capped(relations)
+    names = [r["name"] for r in kept]
+    columns = columns_by_table(insp, schema, names)
+    indexes = {key[1]: idx for key, idx in insp.get_multi_indexes(
+        schema=schema, filter_names=names).items()}
     tables: dict[str, Any] = {}
-    for rel in relations:
+    for rel in kept:
         name = rel["name"]
         tables[name] = {
             "type": rel["type"],
@@ -36,7 +39,7 @@ def sql_snapshot(
                 for i in indexes.get(name, [])
             },
         }
-    return {"tables": tables}
+    return {"tables": tables, "truncated": truncated}
 
 
 def diff(a: str, b: str, snap_a: dict[str, Any], snap_b: dict[str, Any]) -> dict[str, Any]:
@@ -52,6 +55,9 @@ def diff(a: str, b: str, snap_a: dict[str, Any], snap_b: dict[str, Any]) -> dict
         "b": b,
         "tables_only_in_a": sorted(tables_a.keys() - tables_b.keys()),
         "tables_only_in_b": sorted(tables_b.keys() - tables_a.keys()),
+        # A capped snapshot leaves tables out; "only in" then may be wrong.
+        "truncated_a": bool(snap_a.get("truncated", False)),
+        "truncated_b": bool(snap_b.get("truncated", False)),
         "changed": changed,
     }
 

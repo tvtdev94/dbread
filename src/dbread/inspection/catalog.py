@@ -16,6 +16,10 @@ from sqlalchemy.engine.reflection import Inspector, ObjectKind
 # Search results stop here so a short pattern on a wide schema cannot return
 # tens of thousands of matches.
 MAX_SEARCH_MATCHES = 200
+# Relations `database_overview` and `diff_schema` describe per call, first by
+# name; past it the result says `truncated`. Keeps one call's payload bounded
+# on schemas with thousands of tables.
+MAX_RELATIONS = 500
 
 # Row estimate + on-disk size per relation. `:schema` is bound, the LIMIT is
 # an int formatted in, so the text needs no further escaping. Views are left
@@ -50,6 +54,11 @@ def list_relations(insp: Inspector, schema: str | None) -> list[dict[str, Any]]:
             for n in insp.get_materialized_view_names(schema=schema)
         ]
     return sorted(found, key=lambda r: r["name"])
+
+
+def capped(relations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """The first MAX_RELATIONS relations (already sorted) and whether any were cut."""
+    return relations[:MAX_RELATIONS], len(relations) > MAX_RELATIONS
 
 
 def stats_statement(dialect: str, limit: int) -> str | None:
@@ -117,18 +126,22 @@ def describe(insp: Inspector, table: str, schema: str | None) -> dict[str, Any]:
     }
 
 
-def columns_by_table(insp: Inspector, schema: str | None) -> dict[str, list[dict]]:
-    """Columns of every relation in one inspector pass (bulk on PostgreSQL)."""
-    multi = insp.get_multi_columns(schema=schema, kind=ObjectKind.ANY)
+def columns_by_table(
+    insp: Inspector, schema: str | None, names: list[str] | None = None
+) -> dict[str, list[dict]]:
+    """Columns of every relation (or of `names`) in one inspector pass."""
+    multi = insp.get_multi_columns(schema=schema, kind=ObjectKind.ANY, filter_names=names)
     return {key[1]: cols for key, cols in multi.items()}
 
 
 def overview(
     insp: Inspector, schema: str | None, relations: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    columns = columns_by_table(insp, schema)
-    pks = {k[1]: v for k, v in insp.get_multi_pk_constraint(schema=schema).items()}
-    fks = insp.get_multi_foreign_keys(schema=schema)
+    names = [r["name"] for r in relations]
+    columns = columns_by_table(insp, schema, names)
+    pks = {k[1]: v for k, v in insp.get_multi_pk_constraint(
+        schema=schema, filter_names=names).items()}
+    fks = insp.get_multi_foreign_keys(schema=schema, filter_names=names)
     tables = [
         {
             "name": rel["name"],
