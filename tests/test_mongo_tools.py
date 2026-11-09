@@ -69,38 +69,81 @@ def _build(tmp_path: Path, *, max_rows: int = 1000) -> tuple[ToolHandlers, Magic
 # ---- list_tables / describe_table -----------------------------------------
 
 
-def test_list_tables_sorted(tmp_path: Path) -> None:
+def test_list_tables_reports_kind_and_hides_system_namespaces(tmp_path: Path) -> None:
     handlers, db = _build(tmp_path)
-    db.list_collection_names.return_value = ["orders", "users", "audit"]
-    assert handlers.list_tables("m") == [
-        {"name": "audit", "type": "collection"},
-        {"name": "orders", "type": "collection"},
+    db.list_collections.return_value = [
+        {"name": "users", "type": "collection", "options": {}},
+        {"name": "active_users", "type": "view", "options": {"viewOn": "users"}},
+        {"name": "system.views", "type": "collection", "options": {}},
+        {"name": "metrics", "type": "timeseries", "options": {}},
+    ]
+    assert handlers.mongo.list_tables("m") == [
+        {"name": "active_users", "type": "view"},
+        {"name": "metrics", "type": "timeseries"},
         {"name": "users", "type": "collection"},
     ]
 
 
-def test_describe_table_samples_and_infers(tmp_path: Path) -> None:
-    handlers, db = _build(tmp_path)
+def _describable(db: MagicMock, docs: list[dict]) -> MagicMock:
     coll = MagicMock()
-    coll.aggregate.return_value = iter([
-        {"_id": 1, "email": "a@x", "age": 10},
-        {"_id": 2, "email": "b@x", "age": 20},
-    ])
+    coll.aggregate.return_value = iter(docs)
     coll.list_indexes.return_value = [
-        {"name": "_id_", "key": {"_id": 1}, "unique": True},
+        {"name": "_id_", "key": {"_id": 1}},
         {"name": "email_1", "key": {"email": 1}, "unique": True},
     ]
     db.__getitem__.return_value = coll
+    db.list_collections.return_value = [{
+        "name": "users", "type": "collection",
+        "options": {"validator": {"$jsonSchema": {"required": ["email"]}}},
+    }]
+    return coll
 
-    res = handlers.describe_table("m", "users")
+
+def test_describe_table_samples_and_infers(tmp_path: Path) -> None:
+    handlers, db = _build(tmp_path)
+    # The server hands back each sampled document wrapped as {doc: ...}.
+    coll = _describable(db, [
+        {"doc": {"_id": 1, "email": "a@x", "age": 10}},
+        {"doc": {"_id": 2, "email": "b@x"}},
+    ])
+
+    res = handlers.mongo.describe_table("m", "users")
     assert res["source"] == "sampled"
     assert res["sample_size"] == 2
+    assert res["type"] == "collection"
+    assert res["validator"] == {"$jsonSchema": {"required": ["email"]}}
     fields = {f["name"]: f for f in res["fields"]}
     assert fields["_id"]["pk"] is True
-    # $sample stage used with configured sample_size
-    args, _ = coll.aggregate.call_args
-    assert args[0] == [{"$sample": {"size": 50}}]
+    # A field absent from one document is half-present, not present-but-null.
+    assert fields["age"]["frequency"] == 0.5
+    assert fields["age"]["types"] == ["int"]
     assert len(res["indexes"]) == 2
+    # The sample is drawn through the guarded query path at the configured size.
+    pipeline = coll.aggregate.call_args.args[0]
+    assert pipeline[0] == {"$sample": {"size": 50}}
+    assert pipeline[-1] == {"$limit": 50}
+    assert "maxTimeMS" in coll.aggregate.call_args.kwargs
+
+
+def test_describe_table_sample_is_audited(tmp_path: Path) -> None:
+    handlers, db = _build(tmp_path)
+    _describable(db, [])
+    handlers.mongo.describe_table("m", "users")
+    import json as _json
+    logged = [
+        _json.loads(_json.loads(line)["sql"])
+        for line in Path(handlers.audit.path).read_text(encoding="utf-8").splitlines()
+    ]
+    # One row for the catalog read, one for the sample draw.
+    assert [next(iter(cmd)) for cmd in logged] == ["listCollections", "aggregate"]
+    assert logged[1]["pipeline"][0] == {"$sample": {"size": 50}}
+
+
+def test_describe_unknown_collection_is_an_error_not_an_empty_schema(tmp_path: Path) -> None:
+    handlers, db = _build(tmp_path)
+    db.list_collections.return_value = []
+    with pytest.raises(ToolError, match="unknown_table: nope"):
+        handlers.mongo.describe_table("m", "nope")
 
 
 # ---- query dispatch: cross-mismatch errors --------------------------------

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from ..config import Settings
@@ -46,11 +46,16 @@ class MongoClientManager:
 
         from pymongo import MongoClient
 
+        options: dict[str, Any] = {}
+        if cfg.mongo and cfg.mongo.read_preference:
+            # Only when configured: a URI `readPreference=` must otherwise win.
+            options["readPreference"] = cfg.mongo.read_preference
         client = MongoClient(
             url,
             serverSelectionTimeoutMS=5000,
             connectTimeoutMS=max(1, cfg.statement_timeout_s) * 1000,
             appname="dbread",
+            **options,
         )
         self._clients[name] = client
         return client

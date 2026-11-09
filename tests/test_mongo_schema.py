@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from dbread.mongo.schema import bson_type, flatten_doc, infer_schema
+from dbread.mongo.schema import (
+    bson_type,
+    field_summary,
+    flatten_doc,
+    infer_schema,
+    profile_docs,
+)
 
 # ---- flatten_doc ---------------------------------------------------------
 
@@ -94,3 +100,43 @@ def test_infer_schema_nested() -> None:
 
 def test_infer_schema_empty_sample() -> None:
     assert infer_schema([], sample_size=100) == []
+
+
+# ---- profile_docs type mix --------------------------------------------------
+
+
+def test_profile_reports_type_share_over_non_null_values() -> None:
+    sample = [{"v": 1}, {"v": 2}, {"v": 3}, {"v": "3"}, {"v": None}, {}]
+    (field,) = profile_docs(sample, ["v"])
+    # Nulls and missing documents are excluded from the denominator.
+    assert field["types"] == {"int": 75.0, "string": 25.0}
+    assert field["type_drift"] is True
+
+
+def test_profile_single_type_is_not_drift() -> None:
+    (field,) = profile_docs([{"v": 1}, {"v": None}], ["v"])
+    assert field["types"] == {"int": 100.0}
+    assert field["type_drift"] is False
+
+
+def test_profile_all_null_field_has_no_types() -> None:
+    (field,) = profile_docs([{"v": None}], ["v"])
+    assert field["types"] == {}
+    assert field["type_drift"] is False
+
+
+# ---- field_summary (schema snapshot columns) --------------------------------
+
+
+def test_field_summary_type_and_nullability() -> None:
+    sample = [
+        {"_id": 1, "a": 1, "b": "x", "c": None, "n": {"k": 1}},
+        {"_id": 2, "a": "1", "b": "y", "c": None},
+    ]
+    out = field_summary(sample)
+    assert out["_id"] == {"type": "int", "nullable": False}
+    assert out["a"] == {"type": "mixed", "nullable": False}
+    assert out["b"] == {"type": "string", "nullable": False}
+    assert out["c"] == {"type": "null", "nullable": True}
+    # Missing from the second document counts as nullable.
+    assert out["n.k"] == {"type": "int", "nullable": True}
