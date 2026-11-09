@@ -11,6 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 SECTION_ROWS = 50
+# Statement text is cut server-side: other sessions' SQL can be huge and
+# carries their literals (see docs/security-threat-model.md).
+QUERY_CHARS = 200
 
 
 @dataclass(frozen=True)
@@ -27,7 +30,7 @@ _PG_STATS_HINT = (
 PG_SECTIONS: dict[str, Section] = {
     "top_statements": Section(
         "SELECT queryid, calls, total_exec_time AS total_ms, "
-        "mean_exec_time AS mean_ms, rows AS rows_returned, query "
+        f"mean_exec_time AS mean_ms, rows AS rows_returned, LEFT(query, {QUERY_CHARS}) AS query "
         "FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 20",
         "CREATE EXTENSION pg_stat_statements; (needs "
         "shared_preload_libraries = 'pg_stat_statements' and a restart), then "
@@ -53,14 +56,14 @@ PG_SECTIONS: dict[str, Section] = {
     "lock_waits": Section(
         "SELECT pid, pg_blocking_pids(pid) AS blocked_by, wait_event_type, "
         "wait_event, state, now() - query_start AS waiting_for, "
-        "LEFT(query, 200) AS query FROM pg_stat_activity "
+        f"LEFT(query, {QUERY_CHARS}) AS query FROM pg_stat_activity "
         "WHERE CARDINALITY(pg_blocking_pids(pid)) > 0 "
         f"ORDER BY query_start LIMIT {SECTION_ROWS}",
         _PG_STATS_HINT,
     ),
     "long_running": Section(
         "SELECT pid, usename, state, now() - xact_start AS transaction_age, "
-        "now() - query_start AS query_age, LEFT(query, 200) AS query "
+        f"now() - query_start AS query_age, LEFT(query, {QUERY_CHARS}) AS query "
         "FROM pg_stat_activity WHERE state <> 'idle' "
         "AND xact_start IS NOT NULL AND pid <> pg_backend_pid() "
         f"ORDER BY xact_start LIMIT {SECTION_ROWS}",
@@ -75,7 +78,7 @@ _MYSQL_SYS_HINT = (
 
 MYSQL_SECTIONS: dict[str, Section] = {
     "top_statements": Section(
-        "SELECT DIGEST_TEXT AS query, COUNT_STAR AS calls, "
+        f"SELECT LEFT(DIGEST_TEXT, {QUERY_CHARS}) AS query, COUNT_STAR AS calls, "
         "SUM_TIMER_WAIT / 1000000000 AS total_ms, "
         "AVG_TIMER_WAIT / 1000000000 AS mean_ms, "
         "SUM_ROWS_EXAMINED AS rows_examined "
@@ -90,8 +93,10 @@ MYSQL_SECTIONS: dict[str, Section] = {
         _MYSQL_SYS_HINT,
     ),
     "lock_waits": Section(
-        "SELECT wait_age, locked_table, waiting_pid, waiting_query, "
-        f"blocking_pid, blocking_query FROM sys.innodb_lock_waits LIMIT {SECTION_ROWS}",
+        "SELECT wait_age, locked_table, waiting_pid, "
+        f"LEFT(waiting_query, {QUERY_CHARS}) AS waiting_query, blocking_pid, "
+        f"LEFT(blocking_query, {QUERY_CHARS}) AS blocking_query "
+        f"FROM sys.innodb_lock_waits LIMIT {SECTION_ROWS}",
         _MYSQL_SYS_HINT,
     ),
     "fragmentation": Section(
