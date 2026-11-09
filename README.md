@@ -117,6 +117,8 @@ connections:
   #   max_rows: 1000
   #   mongo:
   #     sample_size: 100         # docs sampled by describe_table (10-1000)
+  #     databases: [crm, billing] # extra databases this connection may read; ["*"] = all but admin/local/config
+  #     read_preference: secondaryPreferred  # keep reads off the primary (default: driver default)
 
 audit:
   path: ~/.dbread/audit.jsonl   # ~ expansion supported
@@ -236,17 +238,35 @@ npx -p @mermaid-js/mermaid-cli mmdc \
 | Tool | Purpose | Input |
 |------|---------|-------|
 | `list_connections` | Configured connections + dialects | — |
-| `list_tables` | Relations in a connection, tagged `table` / `view` / `materialized_view` / `collection` | `connection`, `schema?` |
-| `list_schemas` | Schema names (Mongo: the one pinned database) | `connection` |
-| `describe_table` | SQL: columns/types/PKs/defaults/indexes/**foreign keys**. Mongo: sampled field schema + indexes | `connection`, `table`, `schema?` |
-| `sample_table` | Most recent rows, auto-ordered by timestamp column, else PK desc (`_id` on Mongo) | `connection`, `table`, `n?`, `schema?` |
-| `profile_table` | Per column: null count + %, distinct count, min/max — over a bounded sample | `connection`, `table`, `columns?`, `schema?`, `sample_size?` |
-| `query` | Run `SELECT`/`WITH`/`EXPLAIN`/`SHOW` (SQL) **or** Mongo `command` (find/count/distinct/aggregate). Auto-limited. Rate-limited. Audited. | `connection`, `sql` \| `command`, `max_rows?`, `params?` |
-| `explain` | Query execution plan | `connection`, `sql` \| `command` |
+| `list_tables` | Relations, tagged `table` / `view` / `materialized_view` (SQL) or `collection` / `view` / `timeseries` (Mongo). PG/MySQL add `row_estimate` + `size_bytes` | `connection`, `schema?`, `database?` |
+| `list_schemas` | Schema names (Mongo: the databases this connection may read) | `connection` |
+| `list_databases` | Mongo only: allowed databases with on-disk size | `connection` |
+| `describe_table` | SQL: columns/types/PKs/defaults/comments/indexes/**foreign keys**/check + unique constraints. Mongo: sampled field schema + indexes + collection type + `$jsonSchema` validator | `connection`, `table`, `schema?`, `database?` |
+| `sample_table` | Most recent rows, auto-ordered by timestamp column, else PK desc (`_id` on Mongo) | `connection`, `table`, `n?`, `schema?`, `database?` |
+| `profile_table` | Per column: null count + %, distinct count, min/max — over a bounded sample. Mongo also reports the BSON type mix and `type_drift` | `connection`, `table`, `columns?`, `schema?`, `sample_size?`, `database?` |
+| `collection_stats` | Mongo only: document count, data/storage size, per-index size and usage (`$collStats` + `$indexStats`) | `connection`, `table`, `database?` |
+| `database_overview` | Every table/collection with kind, row estimate, size, column count, primary key, plus the foreign-key map — in one call | `connection`, `schema?`, `database?` |
+| `search_schema` | Case-insensitive search of table/collection and column/field names across the whole database | `connection`, `pattern`, `schema?`, `database?` |
+| `check_integrity` | Exact whole-table checks: orphaned foreign keys, duplicates over given columns, all-NULL columns, constant columns. Count + up to 5 examples per check | `connection`, `table`, `checks?`, `unique_columns?`, `references?` (Mongo), `schema?`, `database?` |
+| `diff_schema` | Compare two connections (for example staging vs prod): tables, columns, types, nullability, indexes | `connection_a`, `connection_b`, `schema_a?`, `schema_b?`, `database_a?`, `database_b?` |
+| `db_health` | PostgreSQL/MySQL server health: top statements, unused indexes, dead tuples / fragmentation, lock waits, long-running transactions. Each section fails alone with a grant hint | `connection` |
+| `query` | Run `SELECT`/`WITH`/`EXPLAIN`/`SHOW` (SQL) **or** Mongo `command` (find/count/distinct/aggregate). Auto-limited. Rate-limited. Audited. | `connection`, `sql` \| `command`, `max_rows?`, `params?`, `database?` |
+| `explain` | Query execution plan | `connection`, `sql` \| `command`, `database?` |
+
+`database` is MongoDB-only and must be in the connection's allowlist (see
+[Config](#️-config)); SQL connections reject it.
 
 **Debugging data fast.** `sample_table` then `profile_table` answers "what does
 this data actually look like, and which column is broken" in two calls instead
 of a dozen hand-written queries against the rate budget.
+
+**Auditing a whole database.** `database_overview` maps every table and its
+relationships, `search_schema` finds where a concept lives, `check_integrity`
+counts orphans and duplicates exactly, `diff_schema` spots migration drift
+between environments, and `db_health` shows what the server is struggling
+with. Every row-reading statement behind them goes through the same guard,
+cost guard, statement timeout, rate limit and audit as `query`; catalog-only
+calls cost one rate-limit token and one audit row each.
 
 ---
 
@@ -463,6 +483,9 @@ Honesty pass — what dbread does *not* do:
 - **SQLite drops CTE column lists.** `WITH c(n) AS (...)` is re-serialized by sqlglot without the `(n)`, so the statement fails with `no such column`. Write `WITH c AS (SELECT 1 AS n ...)` instead. PostgreSQL, MySQL and DuckDB are unaffected.
 - **`params` skips LIMIT injection.** Re-serializing a parameterized statement would rewrite `:name` into a placeholder style the driver may not accept, so the SQL is left untouched and only the fetch cap applies. Include your own `LIMIT` with `params`.
 - **`truncated` is conservative.** A result landing exactly on `max_rows` reports `truncated: true` even when nothing was cut.
+- **Mongo `database_overview` / `search_schema` / `diff_schema` field lists are sampled**, and Mongo has no declared relationships, so `relationships` is always empty and `check_integrity` orphans need explicit `references`.
+- **`check_integrity` is exact, so it scans.** It runs through the cost guard and statement timeout; on a large table set `max_rows_estimate` or expect a clear rejection/timeout instead of a slow answer.
+- **`db_health` depends on server privileges.** `pg_stat_statements`, `pg_read_all_stats`, `performance_schema` and `sys` access are needed for full output; see [`docs/setup-db-readonly.md`](docs/setup-db-readonly.md).
 - **`$indexStats` needs an extra grant** beyond the plain `read` role. It is allowlisted, and fails loudly with `not authorized` when the role lacks it.
 
 ---
@@ -520,8 +543,10 @@ Working from a git checkout (source install)? Run `bash scripts/dev-install.sh` 
 
 ```
 src/dbread/
-├── server.py            # MCP stdio entry — registers 8 tools, dispatches to handlers
+├── server.py            # MCP stdio entry — registers 15 tools, dispatches to handlers
 ├── tools.py             # SQL tool handlers (guard → limit → rate → exec → audit)
+├── inspection_tools.py  # whole-database tools: overview, search, integrity, diff, health
+├── inspection/          # SQL catalog reads, integrity/health statements, schema snapshot + diff
 ├── explore.py           # statement builders for sample_table / profile_table
 ├── cost_guard.py        # Layer 2.5 — EXPLAIN-based row estimate before execution
 ├── sql_guard.py         # sqlglot AST validator + LIMIT injection/clamping
