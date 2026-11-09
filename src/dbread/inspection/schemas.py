@@ -53,7 +53,11 @@ def inspection_tool_schemas() -> list[Tool]:
                 "One-call map of a database: every table/view/collection with "
                 "row estimate, size, column count and primary key, plus the "
                 "declared foreign-key relationships (SQL; always empty on "
-                "MongoDB). Start here on an unfamiliar database."
+                "MongoDB). Start here on an unfamiliar database. Reads the "
+                "first 500 relations (SQL) or 20 collections (MongoDB) by name "
+                "and sets truncated when there were more. MongoDB costs one "
+                "rate-limit token plus up to two per collection; a collection "
+                "whose reads fail gets null numbers and an error."
             ),
             inputSchema=_object(
                 {
@@ -141,7 +145,11 @@ def inspection_tool_schemas() -> list[Tool]:
             description=(
                 "Compare the schema of two connections (or two schemas / "
                 "databases of one): tables only on one side, and per table the "
-                "columns and indexes added, removed or changed."
+                "columns and indexes added, removed or changed. Each side reads "
+                "at most 500 relations (SQL) or 20 collections (MongoDB, one "
+                "rate-limit token per collection plus one); truncated_a / "
+                "truncated_b say a side was cut, so its 'only in' lists may be "
+                "incomplete."
             ),
             inputSchema=_object(
                 {

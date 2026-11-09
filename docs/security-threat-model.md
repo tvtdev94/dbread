@@ -33,6 +33,7 @@ Single-process MCP server on a developer workstation. Client = Claude Code (trus
 | **D**enial of Service: row locks held by a read | `SELECT ... FOR UPDATE/SHARE` | Layer 1 rejects `Select.args["locks"]`; PG additionally refuses under `default_transaction_read_only` | Low |
 | **E**levation: leaving the configured database | `USE other_db` on MySQL/MSSQL | Layer 1 drops `USE` from the top-level allowlist | Low |
 | **I**nformation disclosure: a silently ignored query option | Mongo command carrying an option the executor never applies, returning wrong rows without an error | Layer 1 per-command field allowlist rejects unknown keys; per-field behavioral tests prove each accepted option reaches the driver | Low |
+| **I**nformation disclosure: other sessions' statement text | `db_health` reads `pg_stat_statements`, `pg_stat_activity`, `performance_schema` digests and `sys.innodb_lock_waits` | Text cut to 200 characters in the SQL itself; MySQL digests already replace literals with `?`. Exposure is set by the stats grants the user chooses to give (see below) | Medium — documented |
 | **D**enial of Service: audit fills disk | Unbounded log | Layer 4 rotation at 50 MB (1 backup = 100 MB cap) | Low |
 | **E**levation: side-effect function (`pg_read_file`, `xp_cmdshell`) | SELECT wrapping dangerous function | Layer 1 function blacklist + Layer 0 (no EXECUTE on superuser fns) | Low |
 | **D**enial of Service: time-based (`pg_sleep`, `dbms_lock.sleep`, `WAITFOR DELAY`) | Long-sleeping SELECT | Layer 1 blacklist (function + `WAITFOR` regex) + Layer 2 timeout | Low |
@@ -40,6 +41,20 @@ Single-process MCP server on a developer workstation. Client = Claude Code (trus
 | **E**levation: PG CTE-DML trick (`WITH d AS (DELETE...) SELECT...`) | `RETURNING *` from CTE | Layer 1 walks `With.expressions` + Layer 0 | Low |
 | **E**levation: multi-statement injection (`SELECT 1; DROP ...`) | Driver allowing multi-stmt | Layer 1 rejects `len(stmts) > 1`; driver flag where available | Low |
 | **E**levation: unknown statement type (VACUUM, SET, CALL) | `exp.Command` catch-all | Layer 1 rejects top-level `Command` unless in ALLOW list + Layer 0 | Low |
+
+## `db_health` and other sessions' SQL
+
+When the read-only user holds `pg_read_all_stats` (PostgreSQL) or `PROCESS` plus
+`performance_schema` / `sys` access (MySQL), `db_health` returns the text of
+statements other applications ran: top statements, lock waits and long-running
+transactions. PostgreSQL `pg_stat_statements` normalizes constants, but
+`pg_stat_activity` and MySQL's lock-wait view show the raw statement, literals
+included, so the agent can see values other applications sent (for example
+an email in a `WHERE`). dbread cuts every statement-text column to 200
+characters in the SQL itself; `audit.redact_literals` does not apply, since
+it redacts dbread's own statements, not result rows. Leave those grants off
+when other applications' queries may carry sensitive values; each section
+then fails alone with a grant hint.
 
 ## Assumption Log
 

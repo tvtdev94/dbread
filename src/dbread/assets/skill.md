@@ -34,13 +34,13 @@ queries against the rate budget.
 |------|---------|------------|
 | `list_connections` | Enumerate configured DBs + dialects | — |
 | `list_tables` | Relations in one connection. `{name, type}` — `table` · `view` · `materialized_view` (SQL), `collection` · `view` · `timeseries` (Mongo). PG/MySQL add `row_estimate`, `size_bytes` | `connection`, `schema?`, `database?` |
-| `list_schemas` | Schema names (Mongo: the databases this connection may read) | `connection` |
+| `list_schemas` | Schema names (Mongo: the databases this connection may read) | `connection`, `database?` |
 | `list_databases` | Mongo only: allowed databases + size | `connection` |
 | `describe_table` | Columns · types · PKs · defaults · comments · indexes · **foreign keys** · check/unique constraints (SQL) · sampled field schema + validator (Mongo) | `connection`, `table`, `schema?`, `database?` |
 | `sample_table` | Most recent rows, auto-ordered by timestamp column, else PK desc (`_id` on Mongo) | `connection`, `table`, `n?`, `schema?`, `database?` |
 | `profile_table` | Per column: null count + %, distinct count, min/max. Sampled. Mongo adds `types` + `type_drift` | `connection`, `table`, `columns?`, `schema?`, `sample_size?`, `database?` |
 | `collection_stats` | Mongo only: count, sizes, per-index size + usage | `connection`, `table`, `database?` |
-| `database_overview` | All tables/collections with kind, row estimate, size, PK + the FK map, in one call | `connection`, `schema?`, `database?` |
+| `database_overview` | All tables/collections with kind, row estimate, size, PK + the FK map, in one call (first 500 relations / 20 Mongo collections; `truncated` says so) | `connection`, `schema?`, `database?` |
 | `search_schema` | Find tables/columns/fields by name substring | `connection`, `pattern`, `schema?`, `database?` |
 | `check_integrity` | Exact: orphaned FKs, duplicates over `unique_columns`, all-NULL and constant columns. Count + ≤5 examples | `connection`, `table`, `checks?`, `unique_columns?`, `references?` (Mongo), `schema?`, `database?` |
 | `diff_schema` | Compare two connections' schemas (staging vs prod) | `connection_a`, `connection_b`, `schema_a?`, `schema_b?`, `database_a?`, `database_b?` |
