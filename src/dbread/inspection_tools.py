@@ -48,10 +48,10 @@ class InspectionTools:
         if cfg.dialect == "mongodb":
             return self.mongo.database_overview(connection, database=database)
         insp = self._metadata(connection, "database_overview", schema)
-        relations = self.list_tables(connection, schema)
+        relations, truncated = catalog.capped(self.list_tables(connection, schema))
         resolved = schema if schema is not None else insp.default_schema_name
         return {"connection": connection, "schema": resolved,
-                **catalog.overview(insp, schema, relations)}
+                **catalog.overview(insp, schema, relations), "truncated": truncated}
 
     def search_schema(
         self,
@@ -82,6 +82,8 @@ class InspectionTools:
         # The MCP SDK does not enforce inputSchema, so the list shapes are checked here.
         _require_str_list(checks, "checks")
         _require_str_list(unique_columns, "unique_columns")
+        if checks is not None and not checks:
+            raise _tool_error("invalid_input: checks must not be empty")
         unknown = [c for c in checks or [] if c not in integrity.CHECKS]
         if unknown:
             raise _tool_error(
@@ -107,7 +109,7 @@ class InspectionTools:
         results = integrity.run_checks(
             engine,
             target,
-            list(checks) if checks else list(integrity.CHECKS),
+            list(checks) if checks is not None else integrity.default_checks(unique_columns),
             unique_columns,
             lambda sql, rows: self.query(connection, sql=sql, max_rows=rows),
         )

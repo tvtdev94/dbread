@@ -84,6 +84,19 @@ def test_pg_integrity_finds_null_and_constant_columns(pg_url: str, tmp_path: Pat
     assert constants["examples"][0]["value"] == "USD"
 
 
+def test_pg_constant_check_runs_on_boolean_and_json_columns(
+    pg_url: str, tmp_path: Path
+) -> None:
+    """PostgreSQL has no MIN(boolean) and no json equality; neither may break the check."""
+    h = build_handlers(pg_url, "postgres", tmp_path)
+    out = h.check_integrity("t", "profiles", checks=["constant_columns"])
+    # is_active holds true and false; note holds 'x' and one NULL.
+    assert out["checks"] == [{
+        "check": "constant_columns", "target": "profiles", "violations": 1,
+        "examples": [{"column": "note", "value": "x", "null_count": 1}], "error": None,
+    }]
+
+
 def test_pg_integrity_rejects_references(pg_url: str, tmp_path: Path) -> None:
     h = build_handlers(pg_url, "postgres", tmp_path)
     with pytest.raises(ToolError, match="invalid_input: references"):

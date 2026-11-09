@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import Table, and_, distinct, func, select
+from sqlalchemy import Boolean, Table, and_, case, distinct, func, select, true
 from sqlalchemy.engine import Engine
 
 from ..explore import COMPARABLE_TYPES, MAX_PROFILE_COLUMNS, ORDERABLE_TYPES, _compile
@@ -21,6 +21,11 @@ EXAMPLE_LIMIT = 5
 
 # (sql, max_rows) -> the `query` tool's result dict.
 RunQuery = Callable[[str, int], dict[str, Any]]
+
+
+def default_checks(unique_columns: list[str] | None) -> list[str]:
+    """Every check that can run; duplicates only when there is a key to check."""
+    return [c for c in CHECKS if c != "duplicates" or unique_columns]
 
 
 def run_checks(
@@ -41,10 +46,12 @@ def run_checks(
             )
             results.append(_guarded("orphans", target, lambda p=pairs, f=fkc: _orphans(
                 engine, table, f.referred_table, p, run)))
-    if "duplicates" in checks and unique_columns:
-        target = ",".join(unique_columns)
-        results.append(_guarded("duplicates", target, lambda: _duplicates(
-            engine, table, unique_columns, run)))
+    if "duplicates" in checks:
+        if unique_columns:
+            results.append(_guarded("duplicates", ",".join(unique_columns), lambda: _duplicates(
+                engine, table, unique_columns, run)))
+        else:
+            results.append(_entry("duplicates", "", None, [], "unique_columns required"))
     wanted = [c for c in ("null_columns", "constant_columns") if c in checks]
     if wanted:
         try:
@@ -115,17 +122,21 @@ def _column_stats(engine: Engine, table: Table, run: RunQuery) -> list[dict[str,
                 selected.append(func.count(distinct(col)).label(f"c{i}_distinct"))
             if isinstance(col.type, ORDERABLE_TYPES):
                 selected.append(func.min(col).label(f"c{i}_min"))
+            elif isinstance(col.type, Boolean):
+                # PostgreSQL has no MIN(boolean); 1 when any value is true.
+                selected.append(func.max(case((col == true(), 1), else_=0)).label(f"c{i}_true"))
         out = run(_compile(engine, select(*selected).select_from(table)), 1)
         row = dict(zip(out["columns"], out["rows"][0], strict=False))
         rows = int(row["n_rows"] or 0)
         for i, col in enumerate(chunk):
             distinct_count = row.get(f"c{i}_distinct")
+            any_true = row.get(f"c{i}_true")
             stats.append({
                 "column": col.name,
                 "rows": rows,
                 "nonnull": int(row[f"c{i}_nonnull"] or 0),
                 "distinct": None if distinct_count is None else int(distinct_count),
-                "value": row.get(f"c{i}_min"),
+                "value": row.get(f"c{i}_min") if any_true is None else bool(any_true),
             })
     return stats
 

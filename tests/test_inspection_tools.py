@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, text
 from dbread.audit import AuditLogger
 from dbread.config import AuditConfig, ConnectionConfig, Settings
 from dbread.connections import ConnectionManager
+from dbread.inspection import catalog
 from dbread.inspection.health import SECTIONS, Section
 from dbread.rate_limiter import RateLimiter
 from dbread.sql_guard import SqlGuard
@@ -82,6 +83,22 @@ def test_list_tables_has_stat_keys_even_without_catalog_stats(tmp_path: Path) ->
     assert rows["big_orders"]["type"] == "view"
 
 
+def test_list_tables_survives_a_refused_stats_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stats are decoration: once the budget is spent the relations still list."""
+    monkeypatch.setitem(catalog._STATS_SQL, "sqlite", (
+        "SELECT name, 7 AS row_estimate, 9 AS size_bytes FROM sqlite_master "
+        "WHERE type = 'table' AND :schema = 'main' LIMIT {limit}"
+    ))
+    h, _ = _handlers(tmp_path, {"s": SHOP}, rate_per_min=1)
+    first = {r["name"]: r for r in h.list_tables("s")}
+    assert (first["users"]["row_estimate"], first["users"]["size_bytes"]) == (7, 9)
+    second = {r["name"]: r for r in h.list_tables("s")}
+    assert set(second) == set(first)
+    assert (second["users"]["row_estimate"], second["users"]["size_bytes"]) == (None, None)
+
+
 def test_describe_table_reports_constraints(tmp_path: Path) -> None:
     h, _ = _handlers(tmp_path, {"s": SHOP})
     info = h.describe_table("s", "users")
@@ -108,6 +125,23 @@ def test_overview_maps_tables_and_foreign_keys(tmp_path: Path) -> None:
     assert sorted(
         (r["from_table"], r["from_columns"][0], r["to_table"]) for r in out["relationships"]
     ) == [("orders", "parent_id", "orders"), ("orders", "user_id", "users")]
+
+
+def test_overview_and_diff_cap_relations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Past the cap, the first relations by name are kept and truncated is set."""
+    monkeypatch.setattr(catalog, "MAX_RELATIONS", 2)
+    h, _ = _handlers(tmp_path, {"s": SHOP, "t": SHOP})
+    out = h.database_overview("s")
+    assert [t["name"] for t in out["tables"]] == ["big_orders", "orders"]
+    assert out["truncated"] is True
+    # Relationships of tables left out are left out too.
+    assert {r["from_table"] for r in out["relationships"]} == {"orders"}
+    diff = h.diff_schema("s", "t")
+    assert (diff["truncated_a"], diff["truncated_b"]) == (True, True)
+    monkeypatch.setattr(catalog, "MAX_RELATIONS", 500)
+    assert h.database_overview("s")["truncated"] is False
 
 
 # ---- search_schema ---------------------------------------------------------
@@ -176,6 +210,28 @@ def test_integrity_skips_duplicates_without_unique_columns(tmp_path: Path) -> No
     assert _checks(out, "orphans") == []  # users declares no foreign keys
 
 
+def test_integrity_explicit_duplicates_without_unique_columns_reports_why(
+    tmp_path: Path,
+) -> None:
+    h, _ = _handlers(tmp_path, {"s": SHOP})
+    out = h.check_integrity("s", "users", checks=["duplicates"])
+    assert out["checks"] == [{"check": "duplicates", "target": "", "violations": None,
+                              "examples": [], "error": "unique_columns required"}]
+
+
+def test_integrity_reports_the_value_of_a_constant_boolean(tmp_path: Path) -> None:
+    h, _ = _handlers(tmp_path, {"s": (
+        "CREATE TABLE flags (id INTEGER PRIMARY KEY, active BOOLEAN, off BOOLEAN)",
+        "INSERT INTO flags VALUES (1, 1, 0), (2, 1, NULL), (3, 1, 0)",
+    )})
+    out = h.check_integrity("s", "flags", checks=["constant_columns"])
+    (constants,) = _checks(out, "constant_columns")
+    assert constants["examples"] == [
+        {"column": "active", "value": True, "null_count": 0},
+        {"column": "off", "value": False, "null_count": 1},
+    ]
+
+
 def test_integrity_finds_null_and_constant_columns(tmp_path: Path) -> None:
     h, _ = _handlers(tmp_path, {"s": SHOP})
     out = h.check_integrity("s", "users", checks=["null_columns", "constant_columns"])
@@ -204,6 +260,7 @@ def test_integrity_one_failing_check_does_not_stop_the_rest(tmp_path: Path) -> N
     ("kwargs", "message"),
     [
         ({"checks": ["nope"]}, "unknown check"),
+        ({"checks": []}, "checks must not be empty"),
         ({"checks": "orphans"}, "checks must be a list of strings"),
         ({"unique_columns": "ref"}, "unique_columns must be a list of strings"),
         ({"unique_columns": ["missing"]}, "unknown column: missing"),
@@ -243,6 +300,8 @@ def test_diff_schema_reports_table_column_and_index_changes(tmp_path: Path) -> N
         "b": "b",
         "tables_only_in_a": ["legacy"],
         "tables_only_in_b": ["audit"],
+        "truncated_a": False,
+        "truncated_b": False,
         "changed": {
             "users": {
                 "columns_only_in_a": [],
