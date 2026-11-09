@@ -85,9 +85,13 @@ def _isolated(fn: Callable[[], T]) -> tuple[T | None, str | None]:
 def _entry(
     check: str, target: str, found: tuple[int, list] | None = None, error: str | None = None,
 ) -> dict[str, Any]:
-    violations, examples = found if found and error is None else (0, [])
+    # A check that could not run has no count; 0 would read as "clean".
+    if error is not None or found is None:
+        return {"check": check, "target": target, "violations": None,
+                "examples": [], "error": error}
+    violations, examples = found
     return {"check": check, "target": target, "violations": violations,
-            "examples": examples[:MAX_EXAMPLES], "error": error}
+            "examples": examples[:MAX_EXAMPLES], "error": None}
 
 
 class MongoIntegrityMixin(MongoQueryMixin):

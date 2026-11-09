@@ -83,8 +83,10 @@ def test_one_failing_check_does_not_abort_the_others(tmp_path: Path) -> None:
         references=[{"field": "user_id", "to": "users"}, {"field": "x", "to": "ghosts"}],
     )
     orphans, ghosts, nulls = res["checks"]
-    assert "time limit" in orphans["error"] and orphans["violations"] == 0
-    assert ghosts["error"] == "unknown_table: ghosts"
+    assert "time limit" in orphans["error"]
+    # A check that could not run reports no count rather than a clean 0.
+    assert (orphans["violations"], orphans["examples"]) == (None, [])
+    assert (ghosts["violations"], ghosts["error"]) == (None, "unknown_table: ghosts")
     assert nulls["error"] is None and nulls["violations"] == 1
 
 
