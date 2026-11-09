@@ -250,6 +250,9 @@ async def _run() -> None:
 
     server: Server = Server(SERVER_NAME)
     schemas = _tool_schemas()
+    # Dispatch is by advertised name only: ToolHandlers also carries helpers
+    # and state (`_route`, `guard`, `__init__`) that a client must not reach.
+    tool_names = frozenset(t.name for t in schemas)
 
     @server.list_tools()
     async def _list_tools() -> list[Tool]:
@@ -259,10 +262,10 @@ async def _run() -> None:
     async def _call_tool(name: str, arguments: dict | None) -> list[TextContent]:
         args = arguments or {}
         try:
-            fn = getattr(handlers, name, None)
-            if fn is None:
+            if name not in tool_names:
                 payload = {"error": f"unknown_tool: {name}"}
             else:
+                fn = getattr(handlers, name)
                 # Offload sync DB / SQLAlchemy I/O to the default thread pool so
                 # a slow query never blocks the MCP event loop.
                 payload = await asyncio.to_thread(fn, **args)

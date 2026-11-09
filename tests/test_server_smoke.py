@@ -241,3 +241,17 @@ def test_call_query_runs_under_to_thread(server: Server) -> None:
     payload = json.loads(resp["result"]["content"][0]["text"])
     assert payload.get("columns") == ["n"]
     assert payload.get("rows") == [[2]]
+
+
+@pytest.mark.parametrize("name", ["_route", "__init__", "cost_guard"])
+def test_call_refuses_names_that_are_not_registered_tools(server: Server, name: str) -> None:
+    """Only advertised tools dispatch; handler internals are not callable."""
+    _do_initialize(server)
+    resp = server.send("tools/call", {"name": name, "arguments": {"connection": "smoke"}})
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert payload == {"error": f"unknown_tool: {name}"}
+    # The handlers survived: a real tool still answers afterwards.
+    after = server.send("tools/call", {"name": "list_connections", "arguments": {}})
+    assert json.loads(after["result"]["content"][0]["text"]) == [
+        {"name": "smoke", "dialect": "sqlite"},
+    ]
