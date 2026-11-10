@@ -31,7 +31,7 @@ from dbread.tools import ToolHandlers
 HERE = pathlib.Path(__file__).parent
 COMPOSE = HERE / "docker-compose.yml"
 
-PG_URL = "postgresql+psycopg2://ai_readonly:ropw@localhost:54329/testdb"
+PG_URL = "postgresql+psycopg2://ai_readonly:ropw@localhost:15432/testdb"
 MYSQL_URL = "mysql+pymysql://ai_readonly:ropw@localhost:33069/testdb"
 CLICKHOUSE_URL = "clickhouse+http://ai_readonly:ropw@localhost:18123/testdb"
 MONGO_URL = os.environ.get(

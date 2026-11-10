@@ -8,7 +8,9 @@ services:
       POSTGRES_PASSWORD: adminpw
       POSTGRES_DB: testdb
     ports:
-      - "54329:5432"
+      # Below 49152: Windows reserves shifting blocks of the dynamic range
+      # (49152-65535) at boot, which made a port up there fail to bind at random.
+      - "15432:5432"
     volumes:
       - ./fixtures/pg-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
