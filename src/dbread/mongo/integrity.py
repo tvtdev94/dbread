@@ -221,7 +221,9 @@ class MongoIntegrityMixin(MongoQueryMixin):
             return found
         row = rows[0]
         total = int(row.get("total", 0))
-        codecs = self.db(connection, database).codec_options
+        # From the client, not `db()`: the scope was already checked for the
+        # aggregate above, and dbread never overrides codecs per database.
+        codecs = self.mc.get_client(connection).codec_options
         for i, f in enumerate(fields):
             if int(row.get(f"n{i}", 0)) == 0:
                 found["null_columns"].append({"column": f})

@@ -109,7 +109,7 @@ def test_uuid_constant_is_compared_with_the_connection_codecs(tmp_path: Path) ->
 
     h, client = build(tmp_path)
     db = client["testdb"]
-    db.codec_options = CodecOptions(uuid_representation=UuidRepresentation.STANDARD)
+    client.codec_options = CodecOptions(uuid_representation=UuidRepresentation.STANDARD)
     db.collections = [coll("orders")]
     same = uuid.uuid4()
     db.responder = lambda c, p: (

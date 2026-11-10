@@ -60,6 +60,7 @@ class FakeDb:
 class FakeClient:
     def __init__(self, *names: str) -> None:
         self.dbs = {n: FakeDb(n) for n in names}
+        self.codec_options = CodecOptions()
         self.listed: list[dict] = []
         self.list_calls: list[dict] = []
 
