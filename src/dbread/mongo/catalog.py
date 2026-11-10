@@ -46,11 +46,12 @@ class MongoCatalogMixin(MongoQueryMixin):
         tables: list[dict[str, Any]] = []
         for info in infos[:MAX_COLLECTIONS]:
             entry = self._overview_entry(connection, info, database)
+            tables.append(entry)
             # Once the budget is spent every further read is refused too, so
             # stop instead of sending (and auditing) one refusal per collection.
+            # The refused entry stays, so the caller sees why the list ends.
             if entry.get("error", "").startswith("rate_limit_exceeded"):
                 break
-            tables.append(entry)
         return {
             "connection": connection,
             "schema": db.name,

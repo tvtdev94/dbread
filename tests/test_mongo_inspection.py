@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from bson.codec_options import CodecOptions
 
 from dbread.audit import AuditLogger
 from dbread.config import Settings
@@ -43,6 +44,7 @@ class FakeColl:
 class FakeDb:
     def __init__(self, name: str, collections: list[dict] | None = None) -> None:
         self.name = name
+        self.codec_options = CodecOptions()
         self.collections = collections or []
         self.indexes: dict[str, list[dict]] = {}
         self.responder: Responder = lambda coll, pipeline: []
@@ -329,7 +331,10 @@ def test_database_overview_stops_once_the_rate_limit_refuses(tmp_path: Path) -> 
         if "$collStats" in p[0] else sampled({"_id": 1})
     )
     res = handlers.database_overview("m")
-    assert [t["name"] for t in res["tables"]] == ["a"]
+    a, b = res["tables"]
+    assert a["name"] == "a" and "error" not in a
+    # The refused collection stays in the list, saying why the list ends there.
+    assert b["name"] == "b" and b["error"].startswith("rate_limit_exceeded")
     assert res["truncated"] is True
     # Exactly one refused read, not one per remaining collection.
     refused = [r for r in audit_rows(handlers) if r["status"] == "rejected"]

@@ -73,16 +73,20 @@ def _facet(examples: list[dict]) -> dict:
                        "examples": [*examples, {"$limit": MAX_EXAMPLES}]}}
 
 
-def _same_value(lo: Any, hi: Any) -> bool:
+def _same_value(lo: Any, hi: Any, codec_options: Any) -> bool:
     """`$min == $max` compared as encoded BSON.
 
     Python equality conflates values BSON keeps apart (`1 == True`, also
     nested as `[1] == [True]`), so a field holding both would read as
-    constant. Equal encodings mean the same BSON type and value.
+    constant. Equal encodings mean the same BSON type and value. The values
+    were decoded with the database's codec options (for example a URI
+    `uuidRepresentation` turning UUIDs into `uuid.UUID`), so they must be
+    re-encoded with the same options or the encoder refuses them.
     """
     import bson
 
-    return bson.encode({"v": lo}) == bson.encode({"v": hi})
+    return (bson.encode({"v": lo}, codec_options=codec_options)
+            == bson.encode({"v": hi}, codec_options=codec_options))
 
 
 def _isolated(fn: Callable[[], T]) -> tuple[T | None, str | None]:
@@ -217,9 +221,10 @@ class MongoIntegrityMixin(MongoQueryMixin):
             return found
         row = rows[0]
         total = int(row.get("total", 0))
+        codecs = self.db(connection, database).codec_options
         for i, f in enumerate(fields):
             if int(row.get(f"n{i}", 0)) == 0:
                 found["null_columns"].append({"column": f})
-            elif total > 1 and _same_value(row.get(f"lo{i}"), row.get(f"hi{i}")):
+            elif total > 1 and _same_value(row.get(f"lo{i}"), row.get(f"hi{i}"), codecs):
                 found["constant_columns"].append({"column": f, "value": row.get(f"lo{i}")})
         return found
