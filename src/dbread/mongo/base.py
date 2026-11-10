@@ -30,6 +30,9 @@ T = TypeVar("T")
 # Server-internal databases; `databases: ["*"]` never exposes them.
 SYSTEM_DATABASES = frozenset({"admin", "local", "config"})
 
+# How long a `databases: ["*"]` listing is reused before asking the server again.
+LISTING_TTL_S = 60
+
 
 class MongoBase:
     def __init__(
@@ -47,6 +50,8 @@ class MongoBase:
         self.audit = audit
         self.guard = guard or MongoGuard()
         self.cost_guard = cost_guard or MongoCostGuard()
+        # `databases: ["*"]` listings, per connection: (fetched_at, names).
+        self._listed: dict[str, tuple[float, list[str]]] = {}
 
     # --- database scoping --------------------------------------------------
 
@@ -63,13 +68,26 @@ class MongoBase:
         names = {self.mc.get_db(connection).name}
         configured = self._configured_databases(connection)
         if "*" in configured:
-            listed = self.mc.get_client(connection).list_databases(
-                nameOnly=True, maxTimeMS=self._max_time_ms(connection),
-            )
-            names.update(d["name"] for d in listed if d["name"] not in SYSTEM_DATABASES)
+            names.update(self._listed_databases(connection))
         else:
             names.update(configured)
         return sorted(names)
+
+    def _listed_databases(self, connection: str) -> list[str]:
+        """Non-system databases on the server, reused for LISTING_TTL_S.
+
+        Every read resolves its database, so without the reuse one
+        whole-database tool call would send a listDatabases per collection.
+        """
+        cached = self._listed.get(connection)
+        if cached is not None and time.monotonic() - cached[0] < LISTING_TTL_S:
+            return cached[1]
+        listed = self.mc.get_client(connection).list_databases(
+            nameOnly=True, maxTimeMS=self._max_time_ms(connection),
+        )
+        names = [d["name"] for d in listed if d["name"] not in SYSTEM_DATABASES]
+        self._listed[connection] = (time.monotonic(), names)
+        return names
 
     def db(self, connection: str, database: str | None = None) -> Database:
         """The database a tool call targets, refusing names outside the allowlist."""

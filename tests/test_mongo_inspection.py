@@ -59,6 +59,7 @@ class FakeClient:
     def __init__(self, *names: str) -> None:
         self.dbs = {n: FakeDb(n) for n in names}
         self.listed: list[dict] = []
+        self.list_calls: list[dict] = []
 
     def __getitem__(self, name: str) -> FakeDb:
         return self.dbs.setdefault(name, FakeDb(name))
@@ -66,7 +67,8 @@ class FakeClient:
     def list_database_names(self) -> list[str]:
         return list(self.dbs)
 
-    def list_databases(self, nameOnly: bool = False, **_: Any):  # noqa: N803 - pymongo's name
+    def list_databases(self, nameOnly: bool = False, **kwargs: Any):  # noqa: N803 - pymongo's name
+        self.list_calls.append(kwargs)
         if nameOnly:
             return iter({"name": n} for n in self.dbs)
         return iter(self.listed)
@@ -146,6 +148,14 @@ def test_star_allows_listed_databases_but_never_system_ones(tmp_path: Path) -> N
     with pytest.raises(ToolError, match=r"database_not_allowed: \*"):
         handlers.db("m", "*")
     assert handlers.list_schemas("m") == ["crm", "testdb"]
+
+
+def test_star_listing_is_time_bounded_and_reused_across_reads(tmp_path: Path) -> None:
+    handlers, client = build(tmp_path, databases=["*"], names=("testdb", "crm"))
+    for _ in range(3):
+        handlers.query("m", {"aggregate": "leads", "pipeline": []}, database="crm")
+    # One listing serves every read in the window, and it carries the timeout.
+    assert client.list_calls == [{"maxTimeMS": 30_000}]
 
 
 def test_star_listing_failure_is_a_clean_db_error(tmp_path: Path) -> None:
@@ -307,6 +317,23 @@ def test_database_overview_reads_dotted_names_and_isolates_a_failing_collection(
     assert (broken["row_estimate"], broken["size_bytes"], broken["columns"]) == (
         None, None, None,
     )
+
+
+def test_database_overview_stops_once_the_rate_limit_refuses(tmp_path: Path) -> None:
+    # 3 tokens: the catalog read, then one collection's sample + stats.
+    handlers, client = build(tmp_path, rate=3)
+    db = client["testdb"]
+    db.collections = [coll("a"), coll("b"), coll("c")]
+    db.responder = lambda c, p: (
+        [{"count": 1, "size": 1, "storage": 1, "index_sizes": {}}]
+        if "$collStats" in p[0] else sampled({"_id": 1})
+    )
+    res = handlers.database_overview("m")
+    assert [t["name"] for t in res["tables"]] == ["a"]
+    assert res["truncated"] is True
+    # Exactly one refused read, not one per remaining collection.
+    refused = [r for r in audit_rows(handlers) if r["status"] == "rejected"]
+    assert len(refused) == 1
 
 
 @pytest.mark.parametrize("tool", ["database_overview", "schema_snapshot"])

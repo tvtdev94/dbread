@@ -47,9 +47,12 @@ Single-process MCP server on a developer workstation. Client = Claude Code (trus
 When the read-only user holds `pg_read_all_stats` (PostgreSQL) or `PROCESS` plus
 `performance_schema` / `sys` access (MySQL), `db_health` returns the text of
 statements other applications ran: top statements, lock waits and long-running
-transactions. PostgreSQL `pg_stat_statements` normalizes constants, but
-`pg_stat_activity` and MySQL's lock-wait view show the raw statement, literals
-included, so the agent can see values other applications sent (for example
+transactions. PostgreSQL `pg_stat_statements` replaces constants in DML with
+`$1`-style placeholders, but before PostgreSQL 16 it keeps utility statements
+verbatim (for example `ALTER ROLE ... PASSWORD '...'` when
+`pg_stat_statements.track_utility` is on, the default) — set
+`track_utility = off` on PostgreSQL 15 and older. `pg_stat_activity` and
+MySQL's lock-wait view always show the raw statement, literals included, so the agent can see values other applications sent (for example
 an email in a `WHERE`). dbread cuts every statement-text column to 200
 characters in the SQL itself; `audit.redact_literals` does not apply, since
 it redacts dbread's own statements, not result rows. Leave those grants off

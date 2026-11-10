@@ -74,10 +74,15 @@ def _facet(examples: list[dict]) -> dict:
 
 
 def _same_value(lo: Any, hi: Any) -> bool:
-    """`$min == $max` as BSON sees it: Python's `1 == True` is two BSON types."""
-    if isinstance(lo, bool) or isinstance(hi, bool):
-        return type(lo) is type(hi) and lo == hi
-    return lo == hi
+    """`$min == $max` compared as encoded BSON.
+
+    Python equality conflates values BSON keeps apart (`1 == True`, also
+    nested as `[1] == [True]`), so a field holding both would read as
+    constant. Equal encodings mean the same BSON type and value.
+    """
+    import bson
+
+    return bson.encode({"v": lo}) == bson.encode({"v": hi})
 
 
 def _isolated(fn: Callable[[], T]) -> tuple[T | None, str | None]:

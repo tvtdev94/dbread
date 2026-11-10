@@ -29,15 +29,23 @@ def collection_infos(
     return sorted(infos, key=lambda c: c["name"])
 
 
-def index_infos(db: Any, table: str, kind: str) -> list[dict[str, Any]]:
-    """listIndexes for a collection; views have none and refuse the command."""
+def index_infos(db: Any, table: str, kind: str, max_time_ms: int) -> list[dict[str, Any]]:
+    """listIndexes for a collection; views have none and refuse the command.
+
+    `list_indexes` takes no `maxTimeMS`, so the statement timeout is applied
+    through pymongo's client-side timeout block instead.
+    """
     if kind == "view":
         return []
+    import pymongo
+
+    with pymongo.timeout(max_time_ms / 1000):
+        indexes = list(db[table].list_indexes())
     return [
         {"name": i.get("name"),
          "keys": list(i["key"].items()) if "key" in i else [],
          "unique": bool(i.get("unique", False))}
-        for i in db[table].list_indexes()
+        for i in indexes
     ]
 
 
@@ -92,9 +100,10 @@ class MongoInspectMixin(MongoQueryMixin):
         db = self._resolve(connection, database, op)
 
         def read() -> tuple[list[dict], list[dict]]:
-            infos = collection_infos(db, self._max_time_ms(connection), table)
+            ms = self._max_time_ms(connection)
+            infos = collection_infos(db, ms, table)
             kind = infos[0]["type"] if infos else "collection"
-            return infos, (index_infos(db, table, kind) if infos else [])
+            return infos, (index_infos(db, table, kind, ms) if infos else [])
 
         infos, indexes = self._metadata(
             connection, op, read, db_name=self._explicit(database, db),

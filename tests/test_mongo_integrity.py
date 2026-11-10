@@ -86,6 +86,19 @@ def test_a_number_and_a_boolean_are_not_one_constant(tmp_path: Path) -> None:
     assert constants["examples"] == [{"column": "on", "value": True}]
 
 
+def test_nested_number_and_boolean_are_not_one_constant(tmp_path: Path) -> None:
+    """The same BSON split holds inside arrays: [1] and [true] are two values."""
+    h, client = build(tmp_path)
+    db = client["testdb"]
+    db.collections = [coll("orders")]
+    db.responder = lambda c, p: (
+        sampled({"_id": 1, "tags": [1]}) if _stage(p) == "$sample"
+        else [{"total": 2, "n0": 2, "lo0": [1], "hi0": [True]}]
+    )
+    (constants,) = h.check_integrity("m", "orders", checks=["constant_columns"])["checks"]
+    assert constants["violations"] == 0
+
+
 def test_one_failing_check_does_not_abort_the_others(tmp_path: Path) -> None:
     h, client = build(tmp_path)
     db = client["testdb"]

@@ -43,15 +43,21 @@ class MongoCatalogMixin(MongoQueryMixin):
         self, connection: str, database: str | None = None,
     ) -> dict[str, Any]:
         db, infos = self._collections(connection, database)
+        tables: list[dict[str, Any]] = []
+        for info in infos[:MAX_COLLECTIONS]:
+            entry = self._overview_entry(connection, info, database)
+            # Once the budget is spent every further read is refused too, so
+            # stop instead of sending (and auditing) one refusal per collection.
+            if entry.get("error", "").startswith("rate_limit_exceeded"):
+                break
+            tables.append(entry)
         return {
             "connection": connection,
             "schema": db.name,
-            "tables": [
-                self._overview_entry(connection, c, database) for c in infos[:MAX_COLLECTIONS]
-            ],
+            "tables": tables,
             "relationships": [],  # Mongo declares no references to report
             "source": "sampled",
-            "truncated": len(infos) > MAX_COLLECTIONS,
+            "truncated": len(tables) < len(infos),
         }
 
     def _overview_entry(
@@ -118,7 +124,7 @@ class MongoCatalogMixin(MongoQueryMixin):
         def read() -> tuple[bool, list[tuple[dict, list[dict]]]]:
             infos = collection_infos(db, ms)
             return len(infos) > MAX_COLLECTIONS, [
-                (c, index_infos(db, c["name"], c["type"])) for c in infos[:MAX_COLLECTIONS]
+                (c, index_infos(db, c["name"], c["type"], ms)) for c in infos[:MAX_COLLECTIONS]
             ]
 
         truncated, catalog = self._metadata(
