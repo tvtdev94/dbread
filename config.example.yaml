@@ -33,6 +33,8 @@ connections:
   #   max_rows: 1000
   #   mongo:
   #     sample_size: 100                  # docs sampled by describe_table (10-1000)
+  #     databases: [marketing]            # extra databases readable via `database`; ["*"] = all but admin/local/config
+  #     read_preference: secondaryPreferred  # optional; keep reads off the primary
 
 audit:
   path: ./audit.jsonl          # supports ~ expansion, e.g. ~/.dbread/audit.jsonl

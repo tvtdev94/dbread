@@ -14,14 +14,40 @@ Dialect = Literal[
 ]
 
 
+ReadPreference = Literal[
+    "primary", "primaryPreferred", "secondary", "secondaryPreferred", "nearest",
+]
+
+# MongoDB refuses these in database names whatever OS the server runs on.
+_MONGO_DB_FORBIDDEN = frozenset('/\\. "$\x00')
+
+
 class MongoConfig(BaseModel):
     sample_size: int = 100
+    # Extra databases tools may target besides the URI's; ["*"] = all but
+    # admin/local/config. None keeps the connection pinned to the URI db.
+    databases: list[str] | None = None
+    read_preference: ReadPreference | None = None
 
     @field_validator("sample_size")
     @classmethod
     def _check_sample_size(cls, v: int) -> int:
         if not 10 <= v <= 1000:
             raise ValueError("sample_size must be between 10 and 1000")
+        return v
+
+    @field_validator("databases")
+    @classmethod
+    def _check_databases(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        if "*" in v:
+            if len(v) != 1:
+                raise ValueError("databases: '*' must be the only entry")
+            return v
+        for name in v:
+            if not name or len(name) > 63 or set(name) & _MONGO_DB_FORBIDDEN:
+                raise ValueError(f"databases: invalid database name {name!r}")
         return v
 
 

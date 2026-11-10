@@ -87,7 +87,7 @@ jobs:
         run: |
           mongosh "$ADMIN_URL" --quiet --eval '
             const d = db.getSiblingDB("dbread_test");
-            d.createUser({user:"ai_ro", pwd:"ro_pw", roles:[{role:"read", db:"dbread_test"}]});
+            d.createUser({user:"ai_ro", pwd:"ro_pw", roles:[{role:"read", db:"dbread_test"}, {role:"read", db:"dbread_extra"}]});
             d.users.insertMany([
               {_id:1, email:"a@x.com", status:"active", created:new Date("2026-01-01"), age:28},
               {_id:2, email:"b@x.com", status:"inactive", created:new Date("2026-02-01"), age:35},
@@ -100,12 +100,28 @@ jobs:
             ]);
             d.users.createIndex({email:1}, {unique:true});
             d.orders.createIndex({user_id:1});
+            d.createCollection("customers", {validator: {$jsonSchema: {bsonType: "object", required: ["name"]}}});
+            d.customers.insertMany([
+              {_id:1, name:"A", phone:"0123"},
+              {_id:2, name:"B", phone:NumberInt(12345)},
+              {_id:3, name:"C", phone:"0999"}
+            ]);
+            d.createView("active_users", "users", [{$match: {status: "active"}}]);
+            d.reviews.insertMany([
+              {_id:1, user_id:1, stars:5, source:"web", legacy:null},
+              {_id:2, user_id:42, stars:1, source:"web", legacy:null},
+              {_id:3, user_id:1, stars:4, source:"web", legacy:null}
+            ]);
+            db.getSiblingDB("dbread_extra").events.insertMany([
+              {_id:1, kind:"signup"},
+              {_id:2, kind:"login"}
+            ]);
           '
       - name: Run mongo E2E tests
         env:
           MONGO_URL: mongodb://ai_ro:ro_pw@localhost:27019/dbread_test?authSource=dbread_test
           SKIP_DOCKER: "1"
-        run: uv run pytest tests/integration/test_e2e_mongo.py -v
+        run: uv run pytest tests/integration/test_e2e_mongo.py tests/integration/test_e2e_mongo_inspection.py -v
 
   extras-install-order:
     name: Verify dbread add-extra preserves prior extras

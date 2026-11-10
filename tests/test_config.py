@@ -85,3 +85,29 @@ def test_mongo_config_sample_size_range() -> None:
         MongoConfig(sample_size=1001)
     assert MongoConfig(sample_size=10).sample_size == 10
     assert MongoConfig(sample_size=1000).sample_size == 1000
+
+
+def test_mongo_databases_allowlist_accepts_names_or_star_alone() -> None:
+    from dbread.config import MongoConfig
+
+    assert MongoConfig(databases=["analytics", "crm"]).databases == ["analytics", "crm"]
+    assert MongoConfig(databases=["*"]).databases == ["*"]
+    assert MongoConfig().databases is None
+
+
+@pytest.mark.parametrize("databases", [["*", "crm"], [""], ["a.b"], ["a b"], ["x" * 64]])
+def test_mongo_databases_allowlist_rejects_bad_entries(databases: list[str]) -> None:
+    from dbread.config import MongoConfig
+
+    with pytest.raises(ValidationError, match="databases"):
+        MongoConfig(databases=databases)
+
+
+def test_mongo_read_preference_is_validated() -> None:
+    from dbread.config import MongoConfig
+
+    assert MongoConfig(read_preference="secondaryPreferred").read_preference == (
+        "secondaryPreferred"
+    )
+    with pytest.raises(ValidationError, match="read_preference"):
+        MongoConfig(read_preference="secondaryish")

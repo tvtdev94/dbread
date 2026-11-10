@@ -1,4 +1,4 @@
-"""MCP server entry point - stdio transport, registers 8 tools."""
+"""MCP server entry point - stdio transport, registers the dbread tools."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from .audit import AuditLogger
 from .config import Settings
 from .connections import ConnectionManager
 from .cost_guard import CostGuard
+from .inspection.schemas import DATABASE_PROPERTY, inspection_tool_schemas
 from .rate_limiter import RateLimiter
 from .sql_guard import SqlGuard
 from .tools import ToolError, ToolHandlers
@@ -27,10 +28,14 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("dbread")
 
 SERVER_NAME = "dbread"
-SERVER_VERSION = "0.9.2"
+SERVER_VERSION = "0.10.0"
 
 
 def _tool_schemas() -> list[Tool]:
+    return _core_tool_schemas() + inspection_tool_schemas()
+
+
+def _core_tool_schemas() -> list[Tool]:
     return [
         Tool(
             name="list_connections",
@@ -40,14 +45,18 @@ def _tool_schemas() -> list[Tool]:
         Tool(
             name="list_tables",
             description=(
-                "List relations in a connection. Returns {name, type} where "
-                "type is table / view / materialized_view / collection."
+                "List relations in a connection. Returns {name, type, "
+                "row_estimate, size_bytes} where type is table / view / "
+                "materialized_view / collection / timeseries. row_estimate and "
+                "size_bytes come from catalog statistics (PostgreSQL, MySQL) "
+                "and are null where unknown."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "connection": {"type": "string", "description": "Connection name"},
                     "schema": {"type": "string", "description": "Optional schema filter"},
+                    "database": DATABASE_PROPERTY,
                 },
                 "required": ["connection"],
             },
@@ -56,11 +65,14 @@ def _tool_schemas() -> list[Tool]:
             name="list_schemas",
             description=(
                 "List schema names in a SQL connection. MongoDB returns the "
-                "single database this connection is pinned to."
+                "databases this connection is allowed to read."
             ),
             inputSchema={
                 "type": "object",
-                "properties": {"connection": {"type": "string"}},
+                "properties": {
+                    "connection": {"type": "string"},
+                    "database": DATABASE_PROPERTY,
+                },
                 "required": ["connection"],
             },
         ),
@@ -78,6 +90,7 @@ def _tool_schemas() -> list[Tool]:
                     "table": {"type": "string"},
                     "n": {"type": "integer", "minimum": 1, "default": 20},
                     "schema": {"type": "string"},
+                    "database": DATABASE_PROPERTY,
                 },
                 "required": ["connection", "table"],
             },
@@ -109,19 +122,26 @@ def _tool_schemas() -> list[Tool]:
                             "mongo.sample_size). Clamped server-side."
                         ),
                     },
+                    "database": DATABASE_PROPERTY,
                 },
                 "required": ["connection", "table"],
             },
         ),
         Tool(
             name="describe_table",
-            description="Describe columns (name, type, nullable, pk) and indexes of a table.",
+            description=(
+                "Describe a table: columns (name, type, nullable, pk, default, "
+                "comment), indexes, foreign keys, check and unique constraints "
+                "and the table comment. MongoDB: sampled fields, indexes and "
+                "the collection validator."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "connection": {"type": "string"},
                     "table": {"type": "string"},
                     "schema": {"type": "string"},
+                    "database": DATABASE_PROPERTY,
                 },
                 "required": ["connection", "table"],
             },
@@ -155,6 +175,7 @@ def _tool_schemas() -> list[Tool]:
                             "is skipped for parameterized statements."
                         ),
                     },
+                    "database": DATABASE_PROPERTY,
                 },
                 "required": ["connection"],
             },
@@ -172,6 +193,7 @@ def _tool_schemas() -> list[Tool]:
                     "connection": {"type": "string"},
                     "sql": {"type": "string"},
                     "command": {"type": "object"},
+                    "database": DATABASE_PROPERTY,
                 },
                 "required": ["connection"],
             },
@@ -228,6 +250,9 @@ async def _run() -> None:
 
     server: Server = Server(SERVER_NAME)
     schemas = _tool_schemas()
+    # Dispatch is by advertised name only: ToolHandlers also carries helpers
+    # and state (`_route`, `guard`, `__init__`) that a client must not reach.
+    tool_names = frozenset(t.name for t in schemas)
 
     @server.list_tools()
     async def _list_tools() -> list[Tool]:
@@ -237,10 +262,10 @@ async def _run() -> None:
     async def _call_tool(name: str, arguments: dict | None) -> list[TextContent]:
         args = arguments or {}
         try:
-            fn = getattr(handlers, name, None)
-            if fn is None:
+            if name not in tool_names:
                 payload = {"error": f"unknown_tool: {name}"}
             else:
+                fn = getattr(handlers, name)
                 # Offload sync DB / SQLAlchemy I/O to the default thread pool so
                 # a slow query never blocks the MCP event loop.
                 payload = await asyncio.to_thread(fn, **args)

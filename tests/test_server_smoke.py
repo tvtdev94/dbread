@@ -169,10 +169,22 @@ def test_initialize_handshake(server: Server) -> None:
 def test_list_tools(server: Server) -> None:
     _do_initialize(server)
     resp = server.send("tools/list")
-    names = {t["name"] for t in resp["result"]["tools"]}
-    assert names == {
+    tools = {t["name"]: t for t in resp["result"]["tools"]}
+    assert set(tools) == {
         "list_connections", "list_tables", "list_schemas", "describe_table",
         "query", "explain", "sample_table", "profile_table",
+        "list_databases", "collection_stats", "database_overview",
+        "search_schema", "check_integrity", "diff_schema", "db_health",
+    }
+    # A client only sends arguments the schema declares.
+    takes_database = {
+        name for name, tool in tools.items()
+        if "database" in tool["inputSchema"].get("properties", {})
+    }
+    assert takes_database == {
+        "list_tables", "list_schemas", "describe_table", "sample_table",
+        "profile_table", "query", "explain", "collection_stats",
+        "database_overview", "search_schema", "check_integrity",
     }
 
 
@@ -200,6 +212,19 @@ def test_call_list_connections(server: Server) -> None:
     assert payload == [{"name": "smoke", "dialect": "sqlite"}]
 
 
+def test_call_new_inspection_tool_over_stdio(server: Server) -> None:
+    """New tools are reached by name through the same dispatcher."""
+    _do_initialize(server)
+    resp = server.send(
+        "tools/call",
+        {"name": "search_schema", "arguments": {"connection": "smoke", "pattern": "NAM"}},
+    )
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert payload["matches"] == [
+        {"table": "t", "column": "name", "type": "TEXT", "kind": "column"},
+    ]
+
+
 def test_call_query_runs_under_to_thread(server: Server) -> None:
     """query path should succeed end-to-end via asyncio.to_thread wrap."""
     _do_initialize(server)
@@ -216,3 +241,17 @@ def test_call_query_runs_under_to_thread(server: Server) -> None:
     payload = json.loads(resp["result"]["content"][0]["text"])
     assert payload.get("columns") == ["n"]
     assert payload.get("rows") == [[2]]
+
+
+@pytest.mark.parametrize("name", ["_route", "__init__", "cost_guard"])
+def test_call_refuses_names_that_are_not_registered_tools(server: Server, name: str) -> None:
+    """Only advertised tools dispatch; handler internals are not callable."""
+    _do_initialize(server)
+    resp = server.send("tools/call", {"name": name, "arguments": {"connection": "smoke"}})
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert payload == {"error": f"unknown_tool: {name}"}
+    # The handlers survived: a real tool still answers afterwards.
+    after = server.send("tools/call", {"name": "list_connections", "arguments": {}})
+    assert json.loads(after["result"]["content"][0]["text"]) == [
+        {"name": "smoke", "dialect": "sqlite"},
+    ]

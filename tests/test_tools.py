@@ -63,8 +63,8 @@ def test_list_connections(tmp_path: Path) -> None:
 
 def test_list_tables(tmp_path: Path) -> None:
     h, _ = _build_handlers(tmp_path)
-    tables = h.list_tables("test")
-    assert {"name": "users", "type": "table"} in tables
+    tables = {t["name"]: t["type"] for t in h.list_tables("test")}
+    assert tables["users"] == "table"
 
 
 def test_describe_table(tmp_path: Path) -> None:
@@ -168,9 +168,9 @@ def test_list_tables_includes_views(tmp_path: Path) -> None:
     """A view the agent cannot see is a view the agent decides does not exist."""
     h, _ = _build_handlers(tmp_path)
     _seed_view_and_fk(tmp_path / "test.db")
-    found = h.list_tables("test")
-    assert {"name": "active_orders", "type": "view"} in found
-    assert {"name": "orders", "type": "table"} in found
+    found = {t["name"]: t["type"] for t in h.list_tables("test")}
+    assert found["active_orders"] == "view"
+    assert found["orders"] == "table"
 
 
 def test_describe_table_exposes_foreign_keys(tmp_path: Path) -> None:

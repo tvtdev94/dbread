@@ -111,3 +111,19 @@ def test_tls_warning_suppressed_for_tls_param(caplog: pytest.LogCaptureFixture) 
     with caplog.at_level(logging.WARNING, logger="dbread.mongo.client"):
         _warn_mongo_tls("m", "mongodb://u:p@host:27017/db?tls=true")
     assert not any("no TLS hint" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize(("mongo", "expected"), [
+    ({"read_preference": "secondaryPreferred"}, "secondaryPreferred"),
+    ({}, None),
+])
+def test_read_preference_reaches_client_only_when_configured(
+    mongo: dict, expected: str | None,
+) -> None:
+    s = Settings.model_validate({
+        "connections": {"m": {"url": "mongodb://h/db", "dialect": "mongodb", "mongo": mongo}},
+    })
+    with patch("pymongo.MongoClient") as mc:
+        MongoClientManager(s).get_client("m")
+    # Absent unless configured, so a URI `readPreference=` keeps working.
+    assert mc.call_args.kwargs.get("readPreference") == expected

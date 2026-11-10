@@ -1,6 +1,8 @@
 services:
   pg:
     image: postgres:16-alpine
+    # pg_stat_statements must be preloaded for db_health's top_statements.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
     environment:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: adminpw

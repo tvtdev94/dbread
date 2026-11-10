@@ -13,11 +13,11 @@ dbread
 ```
 
 The MCP server reads `DBREAD_CONFIG` environment variable (path to `config.yaml`) and registers the following tools:
-- `list_connections`
-- `list_tables`
-- `describe_table`
-- `query`
-- `explain`
+- Per table: `list_connections`, `list_schemas`, `list_tables`, `describe_table`, `sample_table`, `profile_table`, `query`, `explain`
+- Whole database: `database_overview`, `search_schema`, `check_integrity`, `diff_schema`, `db_health` (PostgreSQL/MySQL)
+- MongoDB only: `list_databases`, `collection_stats`
+
+See the [Tools table in the README](../README.md#-tools) for inputs.
 
 Runs indefinitely; connect via Claude Code with `claude mcp add --scope user dbread -- dbread`.
 

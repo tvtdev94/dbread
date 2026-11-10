@@ -31,6 +31,23 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT ON TABLES TO ai_readonly;
 ```
 
+### 2b. Optional: statistics for `db_health`
+
+`db_health` reads PostgreSQL's statistics views. Without these grants each
+affected section returns `error` + `hint` and the rest still works.
+
+```sql
+-- See every session and statistic, not only ai_readonly's own (PG 10+):
+GRANT pg_read_all_stats TO ai_readonly;
+
+-- top_statements needs the extension (requires
+-- shared_preload_libraries = 'pg_stat_statements' and a server restart):
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+```
+
+`pg_read_all_stats` is read-only: it exposes query text and counters, never
+table rows.
+
 ### 3. Enforce read-only transaction + timeout
 
 ```sql
@@ -68,6 +85,14 @@ CREATE USER 'ai_readonly'@'%' IDENTIFIED BY 'CHANGEME_strong_password';
 ```sql
 GRANT SELECT, SHOW VIEW ON mydb.* TO 'ai_readonly'@'%';
 FLUSH PRIVILEGES;
+```
+
+Optional, for `db_health` (each missing grant fails only its own section):
+
+```sql
+GRANT SELECT ON performance_schema.* TO 'ai_readonly'@'%';  -- top_statements
+GRANT SELECT ON sys.* TO 'ai_readonly'@'%';                 -- unused_indexes, lock_waits
+GRANT PROCESS ON *.* TO 'ai_readonly'@'%';                  -- sys views read other sessions
 ```
 
 ### 3. Timeout
@@ -332,10 +357,21 @@ roles: [
 ]
 ```
 
+dbread still reads only the database in the URI unless the connection lists
+more under `mongo.databases` — the role and the allowlist must both permit a
+database:
+
+```yaml
+mongo:
+  databases: [marketing]          # or ["*"]: every database the user can list, except admin/local/config
+  read_preference: secondaryPreferred   # optional: keep inspection reads off the primary
+```
+
 ### Optional: allow `$indexStats`
 
 The plain `read` role covers everything dbread needs except `$indexStats`,
-which answers "is this index ever actually used". Without the grant the stage
+which answers "is this index ever actually used" (used by `collection_stats`,
+which reports `index_usage_error` instead of failing when it is missing). Without the grant the stage
 fails loudly with `not authorized` — nothing breaks, you just cannot ask that
 question. To enable it, add a role carrying the `indexStats` action:
 

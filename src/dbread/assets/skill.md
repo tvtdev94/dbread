@@ -1,7 +1,7 @@
 ---
 name: dbread
-description: Provides safe read-only access to the user's databases (PostgreSQL, MySQL, MSSQL, Oracle, SQLite, DuckDB, ClickHouse, MongoDB) via the dbread MCP server. All writes are blocked by a 5-layer guard; only SELECT / WITH / EXPLAIN / SHOW for SQL and find/count/distinct/aggregate for MongoDB succeed. Also offers sample_table and profile_table for fast data debugging. Queries are automatically row-limited, rate-limited, and audited. Also provides setup CLI helpers (`dbread add`, `dbread add-extra`, `dbread doctor`) for adding connections from any common connection-string format and managing driver extras.
-when_to_use: The user asks to query a database, run SELECT or MongoDB commands, count or aggregate rows, inspect table schemas or indexes, explore an unfamiliar database, preview recent rows, check data quality such as null rates or duplicates, explain a query plan, analyze the audit log, OR add a new database connection / install a missing driver / diagnose a dbread setup issue.
+description: Provides safe read-only access to the user's databases (PostgreSQL, MySQL, MSSQL, Oracle, SQLite, DuckDB, ClickHouse, MongoDB) via the dbread MCP server. All writes are blocked by a 5-layer guard; only SELECT / WITH / EXPLAIN / SHOW for SQL and find/count/distinct/aggregate for MongoDB succeed. Also offers sample_table and profile_table for fast data debugging, plus whole-database inspection: database_overview, search_schema, check_integrity, diff_schema, db_health and Mongo collection_stats. Queries are automatically row-limited, rate-limited, and audited. Also provides setup CLI helpers (`dbread add`, `dbread add-extra`, `dbread doctor`) for adding connections from any common connection-string format and managing driver extras.
+when_to_use: The user asks to query a database, run SELECT or MongoDB commands, count or aggregate rows, inspect table schemas or indexes, explore an unfamiliar database, preview recent rows, check data quality such as null rates or duplicates, explain a query plan, audit a whole database (overview, orphaned rows, schema drift, server health), analyze the audit log, OR add a new database connection / install a missing driver / diagnose a dbread setup issue.
 ---
 
 # dbread — Read-only Database MCP
@@ -33,13 +33,46 @@ queries against the rate budget.
 | Tool | Purpose | Key inputs |
 |------|---------|------------|
 | `list_connections` | Enumerate configured DBs + dialects | — |
-| `list_tables` | Relations in one connection. Returns `{name, type}` — `table` · `view` · `materialized_view` · `collection` | `connection`, `schema?` |
-| `list_schemas` | Schema names (Mongo: the one pinned database) | `connection` |
-| `describe_table` | Columns · types · PKs · defaults · indexes · **foreign keys** (SQL) · sampled field schema (Mongo) | `connection`, `table`, `schema?` |
-| `sample_table` | Most recent rows, auto-ordered by timestamp column, else PK desc (`_id` on Mongo) | `connection`, `table`, `n?`, `schema?` |
-| `profile_table` | Per column: null count + %, distinct count, min/max. Sampled. | `connection`, `table`, `columns?`, `schema?`, `sample_size?` |
-| `query` | Run SELECT / WITH / SHOW (SQL) or find/count/distinct/aggregate (Mongo). Auto-limited. | `connection`, `sql` **or** `command`, `max_rows?`, `params?` |
-| `explain` | Execution plan | `connection`, `sql` **or** `command` |
+| `list_tables` | Relations in one connection. `{name, type}` — `table` · `view` · `materialized_view` (SQL), `collection` · `view` · `timeseries` (Mongo). PG/MySQL add `row_estimate`, `size_bytes` | `connection`, `schema?`, `database?` |
+| `list_schemas` | Schema names (Mongo: the databases this connection may read) | `connection`, `database?` |
+| `list_databases` | Mongo only: allowed databases + size | `connection` |
+| `describe_table` | Columns · types · PKs · defaults · comments · indexes · **foreign keys** · check/unique constraints (SQL) · sampled field schema + validator (Mongo) | `connection`, `table`, `schema?`, `database?` |
+| `sample_table` | Most recent rows, auto-ordered by timestamp column, else PK desc (`_id` on Mongo) | `connection`, `table`, `n?`, `schema?`, `database?` |
+| `profile_table` | Per column: null count + %, distinct count, min/max. Sampled. Mongo adds `types` + `type_drift` | `connection`, `table`, `columns?`, `schema?`, `sample_size?`, `database?` |
+| `collection_stats` | Mongo only: count, sizes, per-index size + usage | `connection`, `table`, `database?` |
+| `database_overview` | All tables/collections with kind, row estimate, size, PK + the FK map, in one call (first 500 relations / 20 Mongo collections; `truncated` says so) | `connection`, `schema?`, `database?` |
+| `search_schema` | Find tables/columns/fields by name substring | `connection`, `pattern`, `schema?`, `database?` |
+| `check_integrity` | Exact: orphaned FKs, duplicates over `unique_columns`, all-NULL and constant columns. Count + ≤5 examples | `connection`, `table`, `checks?`, `unique_columns?`, `references?` (Mongo), `schema?`, `database?` |
+| `diff_schema` | Compare two connections' schemas (staging vs prod) | `connection_a`, `connection_b`, `schema_a?`, `schema_b?`, `database_a?`, `database_b?` |
+| `db_health` | PG/MySQL: top statements, unused indexes, dead tuples/fragmentation, lock waits, long transactions | `connection` |
+| `query` | Run SELECT / WITH / SHOW (SQL) or find/count/distinct/aggregate (Mongo). Auto-limited. | `connection`, `sql` **or** `command`, `max_rows?`, `params?`, `database?` |
+| `explain` | Execution plan | `connection`, `sql` **or** `command`, `database?` |
+
+`database` is for MongoDB connections only and must be in the connection's
+allowlist (`list_schemas` / `list_databases` show it); outside it the server
+answers `database_not_allowed`.
+
+## Auditing a whole database
+
+When the user wants a full check rather than one answer:
+
+```
+1. database_overview(conn)            → every table, size, PK, relationships
+2. search_schema(conn, "email")       → where a concept lives
+3. check_integrity(conn, tbl, ...)    → exact orphan / duplicate / null counts
+4. db_health(conn)                    → slow statements, unused indexes, locks (PG/MySQL)
+5. diff_schema(staging, prod)         → migration drift between environments
+```
+
+- `check_integrity` scans the whole table. Run it on the tables that matter,
+  not on every table in a loop; a `cost_guard_error` or timeout means the
+  table is too big for an exact check — say so instead of retrying.
+- On Mongo pass `references: [{"field": "user_id", "to": "users"}]` for
+  orphan checks; there are no declared foreign keys to read.
+- A `db_health` section with `error` + `hint` lacks a privilege or extension.
+  Report the hint to the user; the other sections are still valid.
+- Mongo `type_drift: true` in `profile_table` means one field holds several
+  BSON types — a common source of silent query misses.
 
 ## SQL vs MongoDB routing
 
