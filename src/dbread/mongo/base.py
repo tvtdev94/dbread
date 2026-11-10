@@ -79,7 +79,8 @@ class MongoBase:
         if not isinstance(database, str) or not database:
             raise_tool_error("invalid_input: database must be a non-empty string")
         configured = self._configured_databases(connection)
-        allowed = database in configured
+        # "*" is the wildcard marker, never a database name to match literally.
+        allowed = database != "*" and database in configured
         if not allowed and "*" in configured and database not in SYSTEM_DATABASES:
             try:
                 allowed = database in self.allowed_databases(connection)

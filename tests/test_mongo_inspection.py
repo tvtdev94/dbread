@@ -142,6 +142,9 @@ def test_star_allows_listed_databases_but_never_system_ones(tmp_path: Path) -> N
         handlers.db("m", "admin")
     with pytest.raises(ToolError, match="database_not_allowed: ghost"):
         handlers.db("m", "ghost")
+    # The wildcard is configuration syntax, not a database the caller can name.
+    with pytest.raises(ToolError, match=r"database_not_allowed: \*"):
+        handlers.db("m", "*")
     assert handlers.list_schemas("m") == ["crm", "testdb"]
 
 
